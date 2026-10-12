@@ -1,0 +1,24 @@
+// Template for wrangler.jsonc, which is generated and not committed: run
+// tools/render_wrangler.sh (or tools/deploy.sh) with R2_BUCKET set in .env or the environment.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "1923-air-combat",
+  "compatibility_date": "2026-10-01",
+  "main": "worker/index.js",
+  "build": {
+    "command": "./build.sh"
+  },
+  // Static files are served straight from web/. The aircraft GLBs are larger than the
+  // 25 MiB asset limit, so web/.assetsignore leaves them out and the worker serves them
+  // from R2 instead (upload with tools/upload_models.sh).
+  "assets": {
+    "directory": "./web",
+    "binding": "ASSETS"
+  },
+  "r2_buckets": [
+    {
+      "binding": "MODELS",
+      "bucket_name": "${R2_BUCKET}"
+    }
+  ]
+}

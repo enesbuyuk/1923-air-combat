@@ -14,10 +14,13 @@ node_modules/
 
 # Cloudflare Wrangler local state
 .wrangler/
+# Generated from wrangler.template.jsonc (tools/render_wrangler.sh); holds private values.
+wrangler.jsonc
 
 # Environment / secrets
 .env
 .env.*
+!.env.example
 
 # Editors & IDEs
 .vscode/

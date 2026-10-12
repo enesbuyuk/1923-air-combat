@@ -1,0 +1,2 @@
+# Too large for Workers static assets; served from R2 by worker/index.js.
+models/*.glb
