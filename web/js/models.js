@@ -1,0 +1,362 @@
+// Aircraft models. Each model is a THREE.Group whose nose points to -Z and
+// whose origin sits at the aircraft's centre (gear height above ground).
+// A user-supplied GLB in web/models/<key>.glb replaces the procedural mesh.
+
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { AIRCRAFT } from './aircraft.js';
+import { GEAR_HEIGHT } from './sim.js';
+
+// ---------------------------------------------------------------------------
+// Geometry helpers
+// ---------------------------------------------------------------------------
+
+/** Planform polygon in the XZ plane. Points are [x right, f forward]; mirrored when `mirror`. */
+function planform(half, thick, mirror = true) {
+  const pts = mirror ? [...half, ...half.slice().reverse().map(([x, f]) => [-x, f])] : half;
+  const shape = new THREE.Shape();
+  shape.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) shape.lineTo(pts[i][0], pts[i][1]);
+  const bevel = thick * 0.45;
+  const g = new THREE.ExtrudeGeometry(shape, {
+    depth: thick, bevelEnabled: true, bevelThickness: bevel, bevelSize: bevel, bevelSegments: 1,
+  });
+  g.translate(0, 0, -thick / 2);
+  g.rotateX(-Math.PI / 2); // shape y -> -Z (forward), depth -> +Y
+  g.computeVertexNormals();
+  return g;
+}
+
+/** Vertical surface. Points are [f forward, h up]. */
+function fin(pts, thick) {
+  const shape = new THREE.Shape();
+  shape.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) shape.lineTo(pts[i][0], pts[i][1]);
+  const g = new THREE.ExtrudeGeometry(shape, { depth: thick, bevelEnabled: false });
+  g.translate(0, 0, -thick / 2);
+  g.rotateY(Math.PI / 2); // shape x -> -Z (forward), depth -> X
+  g.computeVertexNormals();
+  return g;
+}
+
+/** Body of revolution. Profile is [radius, f] from tail to nose. */
+function lathe(profile, sx = 1, sy = 1, seg = 20) {
+  const g = new THREE.LatheGeometry(profile.map(([r, f]) => new THREE.Vector2(r, f)), seg);
+  g.rotateX(-Math.PI / 2); // lathe Y axis -> -Z
+  g.scale(sx, sy, 1);
+  g.computeVertexNormals();
+  return g;
+}
+
+function airframeMaterials(base) {
+  return {
+    skin: new THREE.MeshStandardMaterial({ color: base, metalness: 0.35, roughness: 0.55 }),
+    dark: new THREE.MeshStandardMaterial({ color: 0x2b2f35, metalness: 0.6, roughness: 0.45 }),
+    glass: new THREE.MeshStandardMaterial({
+      color: 0xc9a243, metalness: 0.9, roughness: 0.08, emissive: 0x2a1d05, transparent: true, opacity: 0.88,
+    }),
+    nozzle: new THREE.MeshStandardMaterial({ color: 0x3a3631, metalness: 0.8, roughness: 0.35 }),
+  };
+}
+
+let roundelTex = null;
+function roundel() {
+  // Turkish Air Force roundel: red disc, white ring, red centre.
+  if (!roundelTex) {
+    const c = document.createElement('canvas');
+    c.width = c.height = 128;
+    const x = c.getContext('2d');
+    const ring = (r, col) => { x.fillStyle = col; x.beginPath(); x.arc(64, 64, r, 0, Math.PI * 2); x.fill(); };
+    ring(62, '#e30a17'); ring(40, '#ffffff'); ring(22, '#e30a17');
+    roundelTex = new THREE.CanvasTexture(c);
+    roundelTex.colorSpace = THREE.SRGBColorSpace;
+  }
+  return roundelTex;
+}
+
+function addRoundel(group, x, y, z, size) {
+  const m = new THREE.Mesh(
+    new THREE.CircleGeometry(size, 24),
+    new THREE.MeshBasicMaterial({ map: roundel(), transparent: true, polygonOffset: true, polygonOffsetFactor: -4 }),
+  );
+  m.rotation.x = -Math.PI / 2;
+  m.position.set(x, y, z);
+  group.add(m);
+}
+
+function mesh(g, m, x = 0, y = 0, z = 0) {
+  const o = new THREE.Mesh(g, m);
+  o.position.set(x, y, z);
+  o.castShadow = true;
+  return o;
+}
+
+// ---------------------------------------------------------------------------
+// Procedural airframes (dimensions in metres, z = -forward)
+// ---------------------------------------------------------------------------
+
+function buildF16() {
+  const g = new THREE.Group();
+  const m = airframeMaterials(0x8d949c);
+  g.add(mesh(lathe([[0.5, -7.5], [0.72, -6.4], [0.82, -4.0], [0.82, 1.5], [0.72, 3.6], [0.48, 5.6], [0.18, 7.1], [0.02, 7.6]], 1, 0.95), m.skin));
+  g.add(mesh(new THREE.BoxGeometry(1.15, 0.75, 4.2), m.skin, 0, -0.75, -0.6)); // intake trunk
+  g.add(mesh(new THREE.BoxGeometry(1.0, 0.55, 0.3), m.dark, 0, -0.78, -2.75)); // intake mouth
+  g.add(mesh(planform([[0.55, 4.2], [0.95, 0.6], [4.75, -2.7], [4.75, -3.6], [0.7, -4.4]], 0.18), m.skin));
+  g.add(mesh(planform([[0.5, -5.1], [3.0, -6.6], [3.0, -7.4], [0.5, -7.3]], 0.12), m.skin));
+  g.add(mesh(fin([[-3.6, 0.55], [-6.0, 4.1], [-7.0, 4.1], [-7.3, 0.55]], 0.14), m.skin));
+  const canopy = mesh(new THREE.SphereGeometry(0.55, 20, 12), m.glass, 0, 0.62, -3.9);
+  canopy.scale.set(1, 0.85, 2.7);
+  g.add(canopy);
+  g.add(mesh(new THREE.CylinderGeometry(0.5, 0.58, 1.1, 16, 1, true).rotateX(Math.PI / 2), m.nozzle, 0, 0.05, 7.3));
+  for (const s of [-1, 1]) {
+    g.add(mesh(new THREE.CylinderGeometry(0.07, 0.07, 3.0, 8).rotateX(Math.PI / 2), m.dark, s * 4.85, 0, -2.7)); // wingtip AIM-9
+    addRoundel(g, s * 3.0, 0.14, -2.6, 0.45);
+  }
+  return g;
+}
+
+function buildF22() {
+  const g = new THREE.Group();
+  const m = airframeMaterials(0x7c838b);
+  g.add(mesh(lathe([[0.85, 3.0], [0.8, 5.5], [0.55, 7.8], [0.25, 9.0], [0.02, 9.5]], 1.45, 0.75), m.skin));
+  g.add(mesh(planform([[0.9, 4.2], [1.95, 1.4], [2.0, -6.6], [1.35, -8.6]], 1.05), m.skin, 0, -0.1, 0));
+  g.add(mesh(planform([[1.9, 1.2], [6.8, -4.1], [6.8, -5.0], [1.9, -6.0]], 0.2), m.skin));
+  g.add(mesh(planform([[1.6, -6.3], [4.7, -8.2], [4.5, -9.3], [1.5, -9.1]], 0.14), m.skin));
+  for (const s of [-1, 1]) {
+    const t = mesh(fin([[-4.3, 0.0], [-6.8, 3.0], [-8.1, 3.0], [-7.7, 0.0]], 0.14), m.skin, s * 1.65, 0.45, 0);
+    t.rotation.z = -s * 0.49;
+    g.add(t);
+    const intake = mesh(new THREE.BoxGeometry(0.75, 1.0, 3.6), m.skin, s * 1.85, -0.15, -1.3);
+    intake.rotation.y = s * 0.12;
+    g.add(intake);
+    g.add(mesh(new THREE.BoxGeometry(0.9, 0.55, 0.9), m.nozzle, s * 0.75, 0.0, 8.6));
+  }
+  const canopy = mesh(new THREE.SphereGeometry(0.6, 20, 12), m.glass, 0, 0.7, -5.4);
+  canopy.scale.set(1, 0.8, 3.0);
+  g.add(canopy);
+  return g;
+}
+
+function buildB2() {
+  const g = new THREE.Group();
+  const m = airframeMaterials(0x2c3036);
+  m.skin.roughness = 0.75;
+  m.skin.metalness = 0.2;
+  // Flying wing with W-shaped trailing edge (half planform, mirrored).
+  g.add(mesh(planform([[0.0, 10.5], [26.2, -6.6], [25.6, -8.0], [17.2, -3.3], [11.2, -7.6], [5.6, -3.9], [0.0, -7.2]], 0.55), m.skin));
+  const hump = mesh(new THREE.SphereGeometry(1, 28, 14), m.skin, 0, 0.35, 1.2);
+  hump.scale.set(4.2, 1.6, 9.0);
+  g.add(hump);
+  for (const s of [-1, 1]) {
+    const eng = mesh(new THREE.SphereGeometry(1, 20, 10), m.skin, s * 3.6, 0.35, 0.2);
+    eng.scale.set(2.4, 1.05, 6.0);
+    g.add(eng);
+    g.add(mesh(new THREE.BoxGeometry(3.4, 0.25, 0.9), m.nozzle, s * 3.5, 0.55, 4.4));
+  }
+  for (const s of [-1, 1]) {
+    const w = mesh(new THREE.BoxGeometry(0.9, 0.3, 0.9), m.glass, s * 0.6, 1.75, -6.1);
+    w.rotation.x = -0.35;
+    g.add(w);
+  }
+  return g;
+}
+
+function buildKaan() {
+  const g = new THREE.Group();
+  const m = airframeMaterials(0x949ba3);
+  g.add(mesh(lathe([[0.95, 3.2], [0.9, 6.0], [0.6, 8.6], [0.25, 10.0], [0.02, 10.5]], 1.4, 0.78), m.skin));
+  g.add(mesh(planform([[1.0, 4.6], [2.2, 1.6], [2.25, -7.4], [1.55, -9.6]], 1.15), m.skin, 0, -0.1, 0));
+  // Trapezoidal wing, ~40 deg leading-edge sweep.
+  g.add(mesh(planform([[2.1, 1.8], [7.0, -3.9], [7.0, -5.0], [2.1, -6.6]], 0.22), m.skin));
+  g.add(mesh(planform([[1.8, -7.1], [5.1, -9.2], [5.0, -10.3], [1.7, -10.1]], 0.14), m.skin));
+  for (const s of [-1, 1]) {
+    const t = mesh(fin([[-5.0, 0.0], [-7.5, 3.3], [-8.8, 3.3], [-8.6, 0.0]], 0.15), m.skin, s * 1.9, 0.5, 0);
+    t.rotation.z = -s * 0.45;
+    g.add(t);
+    const intake = mesh(new THREE.BoxGeometry(0.85, 1.05, 4.0), m.skin, s * 2.05, -0.2, -1.2);
+    intake.rotation.y = s * 0.1;
+    g.add(intake);
+    g.add(mesh(new THREE.CylinderGeometry(0.5, 0.58, 1.2, 16, 1, true).rotateX(Math.PI / 2), m.nozzle, s * 0.85, 0.0, 9.4));
+    addRoundel(g, s * 4.6, 0.2, -4.0, 0.6);
+  }
+  const canopy = mesh(new THREE.SphereGeometry(0.62, 20, 12), m.glass, 0, 0.75, -5.8);
+  canopy.scale.set(1, 0.8, 3.0);
+  g.add(canopy);
+  // Red fin flash for the national fighter.
+  const flash = new THREE.MeshStandardMaterial({ color: 0xe30a17, roughness: 0.6 });
+  for (const s of [-1, 1]) {
+    const f = mesh(fin([[-7.6, 2.4], [-7.95, 3.25], [-8.8, 3.25], [-8.75, 2.4]], 0.17), flash, s * 1.9, 0.5, 0);
+    f.rotation.z = -s * 0.45;
+    g.add(f);
+  }
+  return g;
+}
+
+const BUILDERS = { f16: buildF16, f22: buildF22, b2: buildB2, kaan: buildKaan };
+
+// ---------------------------------------------------------------------------
+// GLB overrides
+// ---------------------------------------------------------------------------
+
+async function tryLoadGLB(key, def, cfg) {
+  const url = `models/${key}.glb`;
+  try {
+    const head = await fetch(url, { method: 'HEAD' });
+    if (!head.ok) return null;
+  } catch {
+    return null;
+  }
+  const gltf = await new GLTFLoader().loadAsync(url);
+  const root = gltf.scene;
+  const c = cfg[key] || {};
+  // Optional per-model fix-ups from models/models.json: rotation in degrees, extra scale.
+  if (c.rotation) root.rotation.set(...c.rotation.map((d) => THREE.MathUtils.degToRad(d)));
+  const wrap = new THREE.Group();
+  wrap.add(root);
+  wrap.updateMatrixWorld(true);
+  const box = meshBounds(wrap, c.boundsExclude && new RegExp(c.boundsExclude, 'i'));
+  const size = box.getSize(new THREE.Vector3());
+  const longest = c.lengthAxis === 'x' ? size.x : size.z;
+  const scale = (def.length / (longest || 1)) * (c.scale || 1);
+  const centre = box.getCenter(new THREE.Vector3());
+  root.position.sub(centre);
+  const hasGear = findGear(root).down.length > 0;
+  if (hasGear || c.groundAlign) {
+    // Put the wheels on the ground: the sim keeps the aircraft origin GEAR_HEIGHT above it.
+    root.position.y += size.y / 2 - GEAR_HEIGHT / scale;
+  }
+  if (c.offset) root.position.add(new THREE.Vector3(...c.offset).divideScalar(scale));
+  wrap.scale.setScalar(scale);
+  wrap.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+  const g = new THREE.Group();
+  g.add(wrap);
+  g.userData.source = 'glb';
+  return g;
+}
+
+/** Bounds of renderable meshes only; empties, lights and helpers in some exports inflate setFromObject. */
+function meshBounds(root, exclude) {
+  const box = new THREE.Box3();
+  root.traverse((o) => {
+    if (!o.isMesh || !o.visible) return;
+    // Skip effect geometry (e.g. huge transparent exhaust discs) named in models.json.
+    const materials = Array.isArray(o.material) ? o.material : [o.material];
+    if (exclude && (exclude.test(o.name) || materials.some((m) => exclude.test(m?.name || '')))) return;
+    // Precise (per-vertex) bounds: the fast box of a rotated node can overshoot by metres
+    // (B-2 gear doors), which would leave the wheels floating above the runway.
+    box.union(new THREE.Box3().setFromObject(o, true));
+  });
+  return box;
+}
+
+// Gear-down variants: "landingOn", "gearDown", or individual legs named "LG-..." / "LG_...".
+const GEAR_DOWN = /landing_?on|gear_?down|^LG(?=[-_]|front|back|left|right|nose|main)/i;
+const GEAR_UP = /landing_?off|gear_?up/i;
+
+/** Nodes for the gear-down / gear-up variants some models ship with. */
+function findGear(root) {
+  const down = [];
+  const up = [];
+  root.traverse((o) => {
+    if (GEAR_DOWN.test(o.name)) down.push(o);
+    else if (GEAR_UP.test(o.name)) up.push(o);
+  });
+  return { down, up };
+}
+
+/** Show the gear-down or gear-up variant (no-op for models without them). */
+export function setGear(group, down) {
+  if (!group.userData.gear) group.userData.gear = findGear(group);
+  const { down: d, up: u } = group.userData.gear;
+  if (group.userData.gearDown === down) return;
+  group.userData.gearDown = down;
+  d.forEach((o) => { o.visible = down; });
+  u.forEach((o) => { o.visible = !down; });
+}
+
+/** Returns { key: { template: Group, def } } with procedural or GLB meshes. */
+export async function loadAircraftModels(onProgress) {
+  let cfg = {};
+  try {
+    const r = await fetch('models/models.json');
+    if (r.ok) cfg = await r.json();
+  } catch { /* optional */ }
+  const out = {};
+  let i = 0;
+  for (const def of AIRCRAFT) {
+    let template = null;
+    try {
+      template = await tryLoadGLB(def.key, def, cfg);
+      // GLB-specific exhaust / eye positions (metres, aircraft frame) from models.json.
+      const c = cfg[def.key] || {};
+      if (template && c.nozzles) def.nozzles = c.nozzles;
+      if (template && c.nozzleRadius) def.nozzleRadius = c.nozzleRadius;
+      if (template && c.eye) def.eye = c.eye;
+    } catch (e) {
+      console.warn(`GLB ${def.key} failed to load, using procedural model`, e);
+    }
+    if (!template) {
+      template = BUILDERS[def.key]();
+      template.userData.source = 'procedural';
+    }
+    out[def.key] = { template, def };
+    onProgress?.(++i / AIRCRAFT.length, def.name);
+  }
+  return out;
+}
+
+/** Clone a template; enemies get a hostile red tint. */
+export function instantiate(template, hostile = false) {
+  const g = template.clone(true);
+  if (hostile) {
+    const red = new THREE.Color(0x8a1a1a);
+    g.traverse((o) => {
+      if (!o.isMesh) return;
+      const tint = (mt) => {
+        const c = mt.clone();
+        if (c.color && !c.map) c.color.lerp(red, 0.55);
+        else if (c.color) c.color.lerp(red, 0.35);
+        if (c.emissive) c.emissive.setHex(0x220000);
+        return c;
+      };
+      o.material = Array.isArray(o.material) ? o.material.map(tint) : tint(o.material);
+    });
+  }
+  return g;
+}
+
+/** Afterburner flame cones attached at each nozzle. */
+export function addFlames(group, def) {
+  const flames = [];
+  const mat = new THREE.MeshBasicMaterial({
+    color: 0xffa040, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false,
+  });
+  const inner = new THREE.MeshBasicMaterial({
+    color: 0x9fd0ff, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false,
+  });
+  const tail = new THREE.MeshBasicMaterial({
+    color: 0xa040ff, vertexColors: true, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false,
+  });
+  for (const [x, y, z] of def.nozzles) {
+    const cone = new THREE.Mesh(new THREE.ConeGeometry(def.nozzleRadius, 1, 14, 1, true), mat);
+    cone.geometry.translate(0, 0.5, 0);
+    cone.rotation.x = Math.PI / 2; // base at nozzle, tip trails toward +Z
+    cone.position.set(x, y, z);
+    const core = new THREE.Mesh(new THREE.ConeGeometry(def.nozzleRadius * 0.55, 1, 10, 1, true), inner);
+    core.geometry.translate(0, 0.5, 0);
+    cone.add(core);
+    // Purple tail that fades in toward the tip; its opacity follows throttle (main.js).
+    const tailGeo = new THREE.ConeGeometry(def.nozzleRadius * 1.05, 1, 14, 8, true);
+    tailGeo.translate(0, 0.5, 0);
+    const ty = tailGeo.attributes.position;
+    const rgba = new Float32Array(ty.count * 4);
+    for (let i = 0; i < ty.count; i++) {
+      rgba.set([1, 1, 1, THREE.MathUtils.smoothstep(ty.getY(i), 0.35, 1)], i * 4);
+    }
+    tailGeo.setAttribute('color', new THREE.BufferAttribute(rgba, 4));
+    cone.add(new THREE.Mesh(tailGeo, tail));
+    group.add(cone);
+    flames.push(cone);
+  }
+  return flames;
+}

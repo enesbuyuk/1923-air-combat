@@ -1,0 +1,11 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "1923-air-combat",
+  "compatibility_date": "2026-10-01",
+  "build": {
+    "command": "./build.sh"
+  },
+  "assets": {
+    "directory": "./web"
+  }
+}

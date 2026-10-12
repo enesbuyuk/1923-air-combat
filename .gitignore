@@ -1,0 +1,43 @@
+# Rust build output
+wasm/target/
+web/*.wasm
+**/*.rs.bk
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Node (if tooling is added later)
+node_modules/
+
+# Cloudflare Wrangler local state
+.wrangler/
+
+# Environment / secrets
+.env
+.env.*
+
+# Editors & IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Archives
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+*.rar
+__MACOSX/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

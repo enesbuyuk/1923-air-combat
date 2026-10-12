@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>1923 Air Combat</title>
+  <link rel="icon" type="image/png" href="img/favicon.png" />
+  <link rel="apple-touch-icon" href="img/apple-touch-icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=Barlow+Semi+Condensed:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="app"></div>
+  <canvas id="hud"></canvas>
+  <div id="gfx"></div>
+
+  <div id="loading" class="overlay">
+    <div class="loading-box">
+      <img class="logo" src="img/logo.png" width="1000" height="452" alt="1923 Air Combat" />
+      <div class="bar"><div id="loading-bar"></div></div>
+      <div id="loading-text">Loading WASM core…</div>
+    </div>
+  </div>
+
+  <div id="menu" class="overlay hidden">
+    <header class="topbar">
+      <div class="brand">
+        <img class="brand-logo" src="img/logo-small.png" width="265" height="120" alt="1923" />
+        <span class="brand-tag">Air Combat</span>
+      </div>
+      <div class="topbar-right">
+        <span class="base">LTBX · Istanbul · Runway 36</span>
+        <button id="fs-btn" class="ghost" title="Toggle fullscreen">Fullscreen</button>
+      </div>
+    </header>
+
+    <section class="roster panel">
+      <h2 class="panel-title">Pilot</h2>
+      <div class="career" data-career></div>
+      <h2 class="panel-title">Select aircraft</h2>
+      <div id="aircraft-list" class="roster-list"></div>
+    </section>
+
+    <section class="spec panel" id="spec"></section>
+
+    <footer class="bottombar">
+      <details class="controls panel">
+        <summary>Controls</summary>
+        <dl>
+          <dt><kbd>S</kbd><kbd>W</kbd></dt><dd>Pitch up / down</dd>
+          <dt><kbd>A</kbd><kbd>D</kbd></dt><dd>Roll</dd>
+          <dt><kbd>Q</kbd><kbd>E</kbd></dt><dd>Rudder</dd>
+          <dt><kbd>Shift</kbd><kbd>R</kbd></dt><dd>Throttle up</dd>
+          <dt><kbd>Ctrl</kbd><kbd>F</kbd></dt><dd>Throttle down</dd>
+          <dt><kbd>Space</kbd> / LMB</dt><dd>Cannon</dd>
+          <dt><kbd>X</kbd> / RMB</dt><dd>Missile</dd>
+          <dt><kbd>C</kbd></dt><dd>Flares</dd>
+          <dt><kbd>B</kbd></dt><dd>Brake / airbrake</dd>
+          <dt><kbd>V</kbd></dt><dd>Cockpit / chase camera</dd>
+          <dt><kbd>I</kbd></dt><dd>Invert pitch</dd>
+          <dt><kbd>M</kbd></dt><dd>Mute</dd>
+          <dt><kbd>Esc</kbd></dt><dd>Pause</dd>
+          <dt><kbd>H</kbd></dt><dd>Show / hide controls</dd>
+        </dl>
+        <p class="controls-note">Gamepad: left stick flies, right stick rudder, RT / LT throttle, A cannon, B missile, X / RB flares, LB brake, Y camera, Start pause. Touch screens get on-screen controls.</p>
+      </details>
+      <div class="settings panel">
+        <span class="setting-label">Mode</span>
+        <div class="segmented" data-setting="mode" role="radiogroup" aria-label="Game mode"></div>
+        <span class="setting-label">Difficulty</span>
+        <div class="segmented" data-setting="difficulty" role="radiogroup" aria-label="Difficulty"></div>
+        <span class="setting-label">Enemy density</span>
+        <div class="segmented" data-setting="density" role="radiogroup" aria-label="Enemy density"></div>
+        <span class="setting-label">Volume</span>
+        <div class="volume"><input type="range" min="0" max="100" step="5" data-volume aria-label="Volume" /><span class="volume-value"></span></div>
+      </div>
+      <button id="start-btn" class="primary"><span>Take off</span></button>
+    </footer>
+  </div>
+
+  <div id="pause" class="overlay hidden">
+    <div class="pause-box panel">
+      <h2>Paused</h2>
+      <div class="career" data-career></div>
+      <button id="resume-btn" class="primary"><span>Resume</span></button>
+      <button id="restart-btn">Restart</button>
+      <button id="menu-btn">Change aircraft</button>
+      <div class="pause-setting">
+        <span class="setting-label">Mode</span>
+        <div class="segmented" data-setting="mode" role="radiogroup" aria-label="Game mode"></div>
+        <span class="setting-label">Difficulty</span>
+        <div class="segmented" data-setting="difficulty" role="radiogroup" aria-label="Difficulty"></div>
+        <span class="setting-label">Enemy density</span>
+        <div class="segmented" data-setting="density" role="radiogroup" aria-label="Enemy density"></div>
+        <span class="setting-label">Volume</span>
+        <div class="volume"><input type="range" min="0" max="100" step="5" data-volume aria-label="Volume" /><span class="volume-value"></span></div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

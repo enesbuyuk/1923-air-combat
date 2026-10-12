@@ -1,0 +1,20 @@
+[package]
+name = "air_1923"
+version = "0.1.0"
+edition = "2021"
+authors = ["Enes Buyuk"]
+description = "Flight and dogfighting simulation core for 1923 Air Combat"
+license = "MIT"
+repository = "https://github.com/enesbuyuk/1923-air-combat"
+homepage = "https://1923-air-combat.enesbuyuk.com"
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
