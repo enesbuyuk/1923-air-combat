@@ -7,7 +7,7 @@ const capitalize = (s) => s[0].toUpperCase() + s.slice(1);
 
 export class Menu {
   /**
-   * @param {object} models       loaded aircraft models (models.js), for the model source label
+   * @param {AircraftModels} models aircraft model registry (models.js), for the model source label
    * @param {(i: number) => void} onSelect
    * @param {() => void} onStart
    */
@@ -36,7 +36,9 @@ export class Menu {
 
   renderSpec(i) {
     const a = AIRCRAFT[i];
-    const source = this.models[a.key].template.userData.source === 'glb' ? '3D model: GLB' : '3D model: procedural';
+    const entry = this.models.entries[a.key];
+    const source = entry.status === 'loading' ? '3D model: loading GLB…'
+      : entry.template.userData.source === 'glb' ? '3D model: GLB' : '3D model: procedural';
     const stat = ([name, value]) => {
       const n = Math.round(value * 10);
       const cells = Array.from({ length: 10 }, (_, j) => `<i${j < n ? ' class="on"' : ''}></i>`).join('');

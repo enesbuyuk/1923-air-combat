@@ -576,7 +576,13 @@ async function boot() {
     progress(0.1, 'Loading WASM core…');
     sim = await Sim.load();
     progress(0.3, 'Preparing aircraft models…');
-    const models = await loadAircraftModels((f, name) => progress(0.3 + f * 0.4, `Model: ${name}`));
+    const models = await loadAircraftModels();
+    // Only the preselected aircraft's GLB now; the rest download when picked or met in the air.
+    progress(0.4, `Model: ${AIRCRAFT[selected].name}`);
+    await models.load(AIRCRAFT[selected].key);
+    models.onChange = (key) => {
+      if (menu && key === AIRCRAFT[selected].key) menu.show(selected);
+    };
     progress(0.75, 'Loading Istanbul satellite imagery…');
     world = buildWorld(scene, renderer);
     effects = new Effects(scene, sim.maxBullets, sim.maxMissiles);

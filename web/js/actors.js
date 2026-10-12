@@ -17,16 +17,37 @@ const CORE_MAX = new THREE.Color(0xd8b0ff);
 /** Bots this badly damaged trail smoke. */
 const BOT_SMOKE_HP = 25;
 
-/** One model per aircraft type; only the flown one is shown. */
+/** One model per aircraft type, built when first shown; only the flown one is visible. */
 export class PlayerAircraft {
   constructor(scene, models) {
-    this.variants = AIRCRAFT.map((def) => {
-      const group = instantiate(models[def.key].template, false);
-      const flames = addFlames(group, def);
-      scene.add(group);
-      return { group, flames };
-    });
+    this.scene = scene;
+    this.models = models;
+    this.variants = [];
     this.gearDown = true;
+  }
+
+  /** Model for `type`, rebuilt when its GLB arrives (models.js swaps the template). */
+  variant(type) {
+    const def = AIRCRAFT[type];
+    const entry = this.models.request(def.key);
+    const old = this.variants[type];
+    if (old?.version === entry.version) return old;
+    if (old) this.scene.remove(old.group);
+    const group = instantiate(entry.template, false);
+    const flames = addFlames(group, def);
+    this.scene.add(group);
+    const glass = [];
+    if (def.cockpitHide) {
+      group.traverse((o) => {
+        if (o.isMesh && def.cockpitHide.test(o.material?.name || '')) glass.push(o);
+      });
+    }
+    return (this.variants[type] = { group, flames, glass, interior: !!def.cockpitHide, version: entry.version });
+  }
+
+  /** Whether the flown aircraft has a modelled cockpit to sit in. */
+  get interior() {
+    return this.current.interior;
   }
 
   get group() {
@@ -35,14 +56,20 @@ export class PlayerAircraft {
 
   /** Show only aircraft `type` (menu preview). */
   select(type) {
-    this.current = this.variants[type];
-    this.variants.forEach((v, i) => { v.group.visible = i === type; });
+    this.current = this.variant(type);
+    this.variants.forEach((v, i) => { if (v) v.group.visible = i === type; });
   }
 
-  /** @param {object} p decoded player state; `hidden` hides the model (cockpit view). */
-  update(p, hidden) {
+  /**
+   * @param {object} p decoded player state
+   * @param {boolean} cockpit cockpit view: models with an interior stay visible minus the
+   *   canopy glass, the others are hidden (the HUD draws a canopy frame instead)
+   */
+  update(p, cockpit) {
     this.select(p.type);
-    this.group.visible = p.alive && !hidden;
+    const v = this.current;
+    this.group.visible = p.alive && (!cockpit || v.interior);
+    v.glass.forEach((o) => { o.visible = !cockpit; });
     this.group.position.set(p.x, p.y, p.z);
     this.group.quaternion.set(...p.quat);
     this.updateGear(p);
@@ -87,10 +114,14 @@ export class BotAircraft {
   model(slot, type, friendly) {
     const variants = (this.slots[slot] ??= []);
     const key = type * 2 + (friendly ? 1 : 0);
-    if (!variants[key]) {
-      const def = AIRCRAFT[type];
-      const g = instantiate(this.models[def.key].template, !friendly);
+    const def = AIRCRAFT[type];
+    const entry = this.models.request(def.key);
+    const old = variants[key];
+    if (old?.userData.version !== entry.version) {
+      if (old) this.scene.remove(old);
+      const g = instantiate(entry.template, !friendly);
       g.userData.flames = addFlames(g, def);
+      g.userData.version = entry.version;
       g.visible = false;
       this.scene.add(g);
       variants[key] = g;

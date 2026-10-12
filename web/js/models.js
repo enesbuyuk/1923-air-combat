@@ -1,6 +1,7 @@
 // Aircraft models. Each model is a THREE.Group whose nose points to -Z and
 // whose origin sits at the aircraft's centre (gear height above ground).
-// A user-supplied GLB in web/models/<key>.glb replaces the procedural mesh.
+// A user-supplied GLB in web/models/<key>.glb replaces the procedural mesh once
+// that aircraft is first needed (selected in the menu or spawned as a bot).
 
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -274,35 +275,71 @@ export function setGear(group, down) {
   u.forEach((o) => { o.visible = !down; });
 }
 
-/** Returns { key: { template: Group, def } } with procedural or GLB meshes. */
-export async function loadAircraftModels(onProgress) {
+/**
+ * Aircraft templates. Every type starts with its procedural mesh; the (large) GLB is
+ * fetched only when `request(key)` first asks for it, then swapped in. `version` bumps
+ * on each swap so callers rebuild their instances.
+ */
+export class AircraftModels {
+  constructor(cfg) {
+    this.cfg = cfg;
+    this.entries = {};
+    this.pending = {};
+    /** @type {((key: string) => void) | null} called when a template or its load status changes */
+    this.onChange = null;
+    for (const def of AIRCRAFT) {
+      const template = BUILDERS[def.key]();
+      template.userData.source = 'procedural';
+      this.entries[def.key] = { template, def, status: 'idle', version: 0 };
+    }
+  }
+
+  /** Entry for `key`; starts its GLB download if not done yet. */
+  request(key) {
+    this.load(key);
+    return this.entries[key];
+  }
+
+  /** Fetch the GLB for `key` once; resolves when it is in place (or the procedural mesh stays). */
+  load(key) {
+    return (this.pending[key] ??= this._load(key));
+  }
+
+  async _load(key) {
+    const entry = this.entries[key];
+    const { def } = entry;
+    entry.status = 'loading';
+    this.onChange?.(key);
+    try {
+      const template = await tryLoadGLB(key, def, this.cfg);
+      if (template) {
+        // GLB-specific exhaust / eye positions (metres, aircraft frame) from models.json.
+        const c = this.cfg[key] || {};
+        if (c.nozzles) def.nozzles = c.nozzles;
+        if (c.nozzleRadius) def.nozzleRadius = c.nozzleRadius;
+        if (c.eye) def.eye = c.eye;
+        // Models with a modelled cockpit stay visible in cockpit view; these materials
+        // (canopy glass) are hidden there so they don't fog the view.
+        if (c.cockpitHide) def.cockpitHide = new RegExp(c.cockpitHide, 'i');
+        entry.template = template;
+        entry.version++;
+      }
+    } catch (e) {
+      console.warn(`GLB ${key} failed to load, using procedural model`, e);
+    }
+    entry.status = 'done';
+    this.onChange?.(key);
+  }
+}
+
+/** Builds the model registry; no GLB is downloaded until requested. */
+export async function loadAircraftModels() {
   let cfg = {};
   try {
     const r = await fetch('models/models.json');
     if (r.ok) cfg = await r.json();
   } catch { /* optional */ }
-  const out = {};
-  let i = 0;
-  for (const def of AIRCRAFT) {
-    let template = null;
-    try {
-      template = await tryLoadGLB(def.key, def, cfg);
-      // GLB-specific exhaust / eye positions (metres, aircraft frame) from models.json.
-      const c = cfg[def.key] || {};
-      if (template && c.nozzles) def.nozzles = c.nozzles;
-      if (template && c.nozzleRadius) def.nozzleRadius = c.nozzleRadius;
-      if (template && c.eye) def.eye = c.eye;
-    } catch (e) {
-      console.warn(`GLB ${def.key} failed to load, using procedural model`, e);
-    }
-    if (!template) {
-      template = BUILDERS[def.key]();
-      template.userData.source = 'procedural';
-    }
-    out[def.key] = { template, def };
-    onProgress?.(++i / AIRCRAFT.length, def.name);
-  }
-  return out;
+  return new AircraftModels(cfg);
 }
 
 /** Clone a template; enemies get a hostile red tint. */
