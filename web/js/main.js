@@ -20,6 +20,9 @@ import { PlayerAircraft, BotAircraft } from './actors.js';
 import { Career, renderCareer } from './career.js';
 import { GroundTargets } from './ground.js';
 import { Replay } from './replay.js';
+import { Airflow } from './airflow.js';
+import { Vortices } from './vortex.js';
+import { WingVapor } from './vapor.js';
 
 /**
  * Fixed simulation step: the core always advances by exactly this much, so the outcome
@@ -69,6 +72,9 @@ let selected = 0;
 let sim;
 let world;
 let effects;
+let airflow;
+let vortices;
+const vapor = new WingVapor();
 let player;
 let bots;
 let groundTargets;
@@ -481,7 +487,8 @@ function hudData(p, stats, dt) {
 /** Per-frame feedback while flying: sounds, smoke, FOV, G effects and the HUD. */
 function updateCockpit(p, stats, dt, frameDt, now) {
   if (!p.alive) controls.throttle = 0;
-  sound.engine(p.engine, p.speed, p.alive, p.type);
+  sound.engine(p.engine, p.alive, p.type);
+  sound.airflow(p.speed, airflow.gust, airflow.buffet, rig.cockpit, p.alive);
   // Cannon sound follows actual rounds fired.
   if (p.ammo < lastAmmo) {
     gunSoundCooldown -= dt;
@@ -533,6 +540,7 @@ function frame(now) {
   if (replay.active && live.alive) replay.stop();
   const alpha = state === 'play' ? accumulator / FIXED_STEP : 1;
   if (replay.active && state === 'play') {
+    vortices.clear();
     renderKillcam(live, frameDt);
   } else {
     const p = interpolatedPlayer(live, alpha);
@@ -542,8 +550,16 @@ function frame(now) {
       effects.updateTracers(sim.bullets(), sim.maxBullets);
       effects.updateMissiles(sim.missiles(), sim.maxMissiles);
     }
+    rig.setAir(state === 'play' ? airflow.buffet : 0);
     rig.update(p, AIRCRAFT[p.type], state === 'menu', dt);
+    // Wingtip vortices and wing vapor freeze while paused.
+    const wakeDt = state === 'play' ? frameDt : 0;
+    if (state === 'menu') vortices.clear();
+    else vortices.update(p, sim.bots(), prevBots, alpha, FIXED_STEP, sim.maxBots, camera.position, wakeDt);
+    vapor.update(p, player.group, vortices.wing(p.type), state === 'play', wakeDt);
   }
+  const flying = (state === 'play' || state === 'pause') && !replay.active;
+  airflow.update(live, camera.position, flying, state === 'pause' ? 0 : frameDt);
   if (state !== 'pause') {
     effects.updateFlares(sim.flares(), sim.maxFlares);
     groundTargets.update(sim.ground(), live, frameDt);
@@ -588,6 +604,8 @@ async function boot() {
     progress(0.75, 'Loading Istanbul satellite imagery…');
     world = buildWorld(scene, renderer);
     effects = new Effects(scene, sim.maxBullets, sim.maxMissiles);
+    airflow = new Airflow(scene);
+    vortices = new Vortices(scene, models);
     player = new PlayerAircraft(scene, models);
     bots = new BotAircraft(scene, models, effects);
     groundTargets = new GroundTargets(scene, sim.maxGround);
@@ -597,7 +615,7 @@ async function boot() {
     selectAircraft(selected);
     await waitForTiles(world.tiles);
     progress(1, 'Ready');
-    window.__1923 = { sim, world, camera, scene, controls };
+    window.__1923 = { sim, world, camera, scene, controls, airflow, vortices, vapor };
     setState('menu');
   } catch (e) {
     console.error(e);

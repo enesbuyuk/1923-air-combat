@@ -232,6 +232,10 @@ web/js/layout.js               layout.rs'nin JS karşılığı
 web/js/aircraft.js             uçak listesi (isim, uzunluk, kokpit göz noktası, egzozlar, füzeler, G limiti)
 web/js/actors.js               sahnedeki oyuncu/bot uçakları: alevler, iniş takımı
 web/js/camera.js               menü, kokpit, takip, enkaz ve kill cam kameraları
+web/js/airflow.js              hava akışı çizgileri ve sarsıntı seviyesi (hamle, türbülans, yüksek hücum açısı)
+web/js/vortex.js               kanat ucu girdap ipleri (sirkülasyon, alçalma, sarılma, yer etkisi, çekirdek büyümesi)
+web/js/vapor.js                sert çekişte kanat üstü buharı, ses hızı civarında buhar konisi
+web/js/wing.js                 her modelin mesh'inden ölçülen kanat ucu ve kök veter
 web/js/input.js                klavye / fare / gamepad kontrolleri
 web/js/touch.js                ekran üstü dokunmatik kontroller
 web/js/replay.js               kill cam kaydı ve ağır çekim tekrar

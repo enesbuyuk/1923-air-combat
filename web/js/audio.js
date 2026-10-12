@@ -67,8 +67,26 @@ export class Sound {
     this.windFilter.frequency.value = 800;
     this.windGain = ctx.createGain();
     this.windGain.gain.value = 0;
-    this.wind.connect(this.windFilter).connect(this.windGain).connect(this.master);
+    // Inside the canopy the rush of air is muffled: a lowpass that opens up in chase view.
+    this.windMuffle = ctx.createBiquadFilter();
+    this.windMuffle.type = 'lowpass';
+    this.windMuffle.frequency.value = 20000;
+    this.wind.connect(this.windFilter).connect(this.windMuffle).connect(this.windGain).connect(this.master);
     this.wind.start();
+
+    // Buffet: low rumble of the airframe shaking at high angle of attack or in turbulence.
+    this.rumble = ctx.createBufferSource();
+    this.rumble.buffer = this.noise;
+    this.rumble.loop = true;
+    this.rumble.playbackRate.value = 0.5;
+    const rf = ctx.createBiquadFilter();
+    rf.type = 'lowpass';
+    rf.frequency.value = 110;
+    rf.Q.value = 4;
+    this.rumbleGain = ctx.createGain();
+    this.rumbleGain.gain.value = 0;
+    this.rumble.connect(rf).connect(this.rumbleGain).connect(this.master);
+    this.rumble.start();
     this.lastBeep = 0;
     this.loadPullUp();
   }
@@ -108,7 +126,7 @@ export class Sound {
     if (this.master) this.master.gain.value = this.masterGain();
   }
 
-  engine(throttle, speed, alive, aircraftType) {
+  engine(throttle, alive, aircraftType) {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
     const base = aircraftType === B2 ? 0.7 : 1; // the B-2 sounds deeper
@@ -117,8 +135,20 @@ export class Sound {
     this.whine.frequency.setTargetAtTime((300 + throttle * 900) * base, t, 0.2);
     this.whineFilter.frequency.setTargetAtTime((1200 + throttle * 2500) * base, t, 0.2);
     this.whineGain.gain.setTargetAtTime(alive ? 0.02 + throttle * 0.05 : 0, t, 0.1);
-    this.windGain.gain.setTargetAtTime(alive ? Math.min(speed / 400, 1) * 0.25 : 0, t, 0.2);
-    this.windFilter.frequency.setTargetAtTime(400 + speed * 3, t, 0.2);
+  }
+
+  /**
+   * Air rushing past: louder and brighter with speed, swelling with gusts (`gust` 0..1),
+   * muffled inside the canopy, plus an airframe rumble for `buffet` 0..1.
+   */
+  airflow(speed, gust, buffet, inside, alive) {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const level = alive ? Math.min(speed / 400, 1) * 0.25 * (1 + gust * 0.6) * (inside ? 0.7 : 1) : 0;
+    this.windGain.gain.setTargetAtTime(level, t, 0.15);
+    this.windFilter.frequency.setTargetAtTime(400 + speed * 3 + gust * 300, t, 0.2);
+    this.windMuffle.frequency.setTargetAtTime(inside ? 900 + speed * 2 : 20000, t, 0.3);
+    this.rumbleGain.gain.setTargetAtTime(alive ? buffet * buffet * 0.5 : 0, t, 0.1);
   }
 
   burst(duration, freq, gain, type = 'lowpass', when = 0) {

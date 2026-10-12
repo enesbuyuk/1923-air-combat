@@ -7,6 +7,17 @@ const quat = new THREE.Quaternion();
 const fwd = new THREE.Vector3();
 const up = new THREE.Vector3();
 const offset = new THREE.Vector3();
+const jitter = new THREE.Euler();
+const jitterQuat = new THREE.Quaternion();
+
+/** Near plane outside / inside the cockpit; inside, the panel sits a few dm from the eye. */
+const NEAR = 0.3;
+const NEAR_COCKPIT = 0.04;
+
+/** Smooth pseudo-random wobble in -1..1 (sum of incommensurate sines). */
+function wobble(t, seed) {
+  return (Math.sin(t * 7.3 + seed) * 0.5 + Math.sin(t * 13.1 + seed * 2.7) * 0.3 + Math.sin(t * 23.7 + seed * 5.1) * 0.2);
+}
 
 export class CameraRig {
   constructor(camera) {
@@ -16,6 +27,14 @@ export class CameraRig {
     this.chaseOffset = new THREE.Vector3();
     this.chaseZoom = 1;
     this.shake = 0;
+    // Aerodynamic buffet 0..1, fed each frame by setAir().
+    this.buffet = 0;
+    this.time = 0;
+  }
+
+  /** Airflow feedback for the camera: `buffet` 0..1 shakes the view. */
+  setAir(buffet) {
+    this.buffet = buffet;
   }
 
   zoom(direction) {
@@ -52,12 +71,38 @@ export class CameraRig {
 
     // Debug hook: window.__1923.freeze = [dx, dy, dz] fixes the camera offset for model inspection.
     const freeze = window.__1923?.freeze;
+    this.time += dt;
+    const inside = !freeze && !inMenu && p.alive && this.cockpit;
     if (freeze) this.lookFrom(pos.x + freeze[0], pos.y + freeze[1], pos.z + freeze[2], pos);
     else if (inMenu) this.turntable(def, dt);
     else if (!p.alive) this.orbitWreck(dt);
     else if (this.cockpit) this.cockpitView(def);
     else this.chaseView(def, dt);
-    if (!freeze && !inMenu && p.alive) this.shake = Math.max(0, this.shake - dt * 2);
+    if (!freeze && !inMenu && p.alive) {
+      this.applyJitter(inside);
+      this.shake = Math.max(0, this.shake - dt * 2);
+    }
+    const near = inside ? NEAR_COCKPIT : NEAR;
+    if (this.camera.near !== near) {
+      this.camera.near = near;
+      this.camera.updateProjectionMatrix();
+    }
+  }
+
+  /**
+   * Hits, cannon and buffet as a small rotation of the view: moving the eye would push
+   * it through the cockpit walls. Buffet is a smooth wobble, shake a random jolt.
+   */
+  applyJitter(inside) {
+    const t = this.time;
+    const b = this.buffet * (inside ? 0.006 : 0.004);
+    const s = this.shake * (inside ? 0.012 : 0.006);
+    jitter.set(
+      wobble(t, 0) * b + (Math.random() - 0.5) * s,
+      wobble(t, 11) * b * 0.6 + (Math.random() - 0.5) * s,
+      wobble(t, 23) * b * 0.8,
+    );
+    this.camera.quaternion.multiply(jitterQuat.setFromEuler(jitter));
   }
 
   lookFrom(x, y, z, target) {
@@ -94,14 +139,13 @@ export class CameraRig {
     this.lookFrom(pos.x + Math.cos(a) * 120, ground + 60, pos.z + Math.sin(a) * 120, offset.set(pos.x, ground, pos.z));
   }
 
+  /** The eye stays fixed in the airframe: any head travel pushes it through the cockpit meshes. */
   cockpitView(def) {
     const c = this.camera;
-    c.position.copy(pos).add(offset.fromArray(def.eye).applyQuaternion(quat));
+    offset.fromArray(def.eye);
+    c.position.copy(pos).add(offset.applyQuaternion(quat));
+    c.up.copy(up);
     c.quaternion.copy(quat);
-    if (this.shake > 0) {
-      c.position.x += (Math.random() - 0.5) * this.shake;
-      c.position.y += (Math.random() - 0.5) * this.shake;
-    }
   }
 
   chaseView(def, dt) {

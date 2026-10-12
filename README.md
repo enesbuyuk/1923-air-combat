@@ -226,6 +226,10 @@ web/js/layout.js               JS mirror of layout.rs
 web/js/aircraft.js             aircraft roster (name, length, cockpit eye, nozzles, missiles, G limit)
 web/js/actors.js               player/bot aircraft in the scene: flames, landing gear
 web/js/camera.js               menu, cockpit, chase, wreck and kill-cam cameras
+web/js/airflow.js              airflow streaks and buffet level (gusts, turbulence, high alpha)
+web/js/vortex.js               wingtip vortex ropes (circulation, sink, roll-up, ground effect, core growth)
+web/js/vapor.js                wing vapor over the upper wing in hard pulls, transonic vapor cone
+web/js/wing.js                 wingtip and root chord measured from each model's mesh
 web/js/input.js                keyboard / mouse / gamepad controls
 web/js/touch.js                on-screen touch controls
 web/js/replay.js               kill-cam recording and slow-motion replay
