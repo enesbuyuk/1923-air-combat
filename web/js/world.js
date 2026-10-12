@@ -17,6 +17,11 @@ function geoToWorld(lat, lon) {
   return { x: (lon - LON0) * M_PER_DEG_LON, z: -(lat - LAT0) * M_PER_DEG_LAT };
 }
 
+/** Inverse of geoToWorld: world metres (x east, z south) to degrees. */
+export function worldToGeo(x, z) {
+  return { lat: LAT0 - z / M_PER_DEG_LAT, lon: LON0 + x / M_PER_DEG_LON };
+}
+
 // Runway / apron geometry from OpenStreetMap, in world metres (x east, z south).
 const RUNWAYS = [
   { ref: '18/36', a: [-38, -680], b: [-42, 735], width: 30, main: true },

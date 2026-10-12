@@ -275,6 +275,7 @@ Durum doğrusal bellekten `Float32Array` olarak okunur: `player_ptr`, `bots_ptr`
 | Şehir modelleri | [Kenney](https://kenney.nl) City Kit | CC0 |
 | Uydu görüntüsü | © Esri, Maxar, Earthstar Geographics | - |
 | Pist verisi | © OpenStreetMap katkıcıları | ODbL |
+| Mini harita karoları | © Esri, HERE, Garmin, © OpenStreetMap katkıcıları | - |
 
 > [!IMPORTANT]
 > F-16 ve F-22 modelleri ticari olmayan lisanslar altındadır; proje bu modellerle birlikte ticari amaçla dağıtılamaz.

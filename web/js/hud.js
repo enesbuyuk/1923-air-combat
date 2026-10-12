@@ -2,6 +2,8 @@
 
 import { GEAR_HEIGHT } from './sim.js';
 import { MODE } from './layout.js';
+import { drawMap } from './minimap.js';
+import { worldToGeo } from './world.js';
 
 const PRIMARY = '#ff7466'; // symbology and good news
 const DANGER = '#ff2a2a';
@@ -627,24 +629,29 @@ export class Hud {
   }
 
   radar(g, w, h, s) {
-    const r = 86;
+    const r = 110;
     const x = w - r - 28;
     const y = h - r - 34;
-    const range = 8000;
+    // Close enough for neighbourhood names on the map; farther contacts sit on the rim.
+    const range = 3000;
+    // Heading-up: rotate world by -heading.
+    const hr = (s.headingDeg * Math.PI) / 180;
     g.save();
     g.fillStyle = PANEL;
     g.strokeStyle = 'rgba(255,116,102,0.35)';
     g.beginPath();
     g.arc(x, y, r, 0, Math.PI * 2);
     g.fill();
+    // Street map under the scope (blank until its tiles arrive).
+    drawMap(g, x, y, r, range, worldToGeo(s.p.x, s.p.z), hr);
+    g.beginPath();
+    g.arc(x, y, r, 0, Math.PI * 2);
     g.stroke();
     g.beginPath();
     g.arc(x, y, r / 2, 0, Math.PI * 2);
     g.moveTo(x - r, y); g.lineTo(x + r, y);
     g.moveTo(x, y - r); g.lineTo(x, y + r);
     g.stroke();
-    // Heading-up: rotate world by -heading.
-    const hr = (s.headingDeg * Math.PI) / 180;
     const cos = Math.cos(hr);
     const sin = Math.sin(hr);
     const plot = (dx, dz) => {
@@ -662,16 +669,25 @@ export class Hud {
       g.fillRect(bx - 3, by - 3, 6, 6);
     }
     for (const t of s.radar) {
-      const [px, py, d] = plot(t.dx, t.dz);
-      if (d > 1) continue;
+      let [px, py, d] = plot(t.dx, t.dz);
+      // Out of range: pinned to the rim, smaller and dimmer, still showing the bearing.
+      const out = d > 1;
+      if (out) {
+        px = x + ((px - x) / d) * (r - 4);
+        py = y + ((py - y) / d) * (r - 4);
+      }
+      const size = out ? 0.7 : 1;
+      g.globalAlpha = out ? 0.6 : 1;
       g.fillStyle = t.friendly ? FRIENDLY : t.locked ? WARN : DANGER;
       if (t.ground) {
-        g.fillRect(px - 3.5, py - 3.5, 7, 7);
+        g.fillRect(px - 3.5 * size, py - 3.5 * size, 7 * size, 7 * size);
+        g.globalAlpha = 1;
         continue;
       }
       g.beginPath();
-      g.arc(px, py, t.b2 ? 4.5 : 3, 0, Math.PI * 2);
+      g.arc(px, py, (t.b2 ? 4.5 : 3) * size, 0, Math.PI * 2);
       g.fill();
+      g.globalAlpha = 1;
     }
     // Missile warning: a spoke toward the nearest missile tracking us.
     const st = s.stats;
@@ -703,7 +719,7 @@ export class Hud {
     g.fill();
     g.font = font(600, 11);
     g.textAlign = 'center';
-    g.fillText('8 km', x, y + r + 14);
+    g.fillText(`${range / 1000} km`, x, y + r + 14);
     g.restore();
   }
 

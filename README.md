@@ -269,6 +269,7 @@ State is read from linear memory as `Float32Array`: `player_ptr`, `bots_ptr`, `b
 | City models | [Kenney](https://kenney.nl) City Kit | CC0 |
 | Satellite imagery | © Esri, Maxar, Earthstar Geographics | - |
 | Runway data | © OpenStreetMap contributors | ODbL |
+| Minimap tiles | © Esri, HERE, Garmin, © OpenStreetMap contributors | - |
 
 > [!IMPORTANT]
 > The F-16 and F-22 models are under non-commercial licenses; the project cannot be distributed for commercial purposes with these models included.
