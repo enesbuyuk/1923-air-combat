@@ -87,7 +87,7 @@ export class Hud {
    * s: {
    *   p (Sim.player()), stats (Sim.stats()), dt, pitchDeg, bankDeg, headingDeg, fovDeg,
    *   targets: [{x, y, onScreen, dist, locked, b2}] (CSS px), lockProgress,
-   *   radar: [{dx, dz, locked, b2}], base: {dx, dz}, cockpit, invert,
+   *   radar: [{dx, dz, locked, b2}], base: {dx, dz}, cockpit, canopyFrame, invert,
    *   maxMissiles, aircraftName, gearDown, airbrake, gStress
    * }
    */
@@ -112,7 +112,7 @@ export class Hud {
       this.flash = Math.max(0, this.flash - s.dt * 1.8);
     }
 
-    if (s.cockpit) this.canopyFrame(g, w, h);
+    if (s.canopyFrame) this.canopyFrame(g, w, h);
     // Dark halo keeps the symbology readable against bright sky.
     g.shadowColor = 'rgba(16,2,3,0.95)';
     g.shadowBlur = 4;

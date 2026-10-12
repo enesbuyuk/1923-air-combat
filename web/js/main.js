@@ -459,6 +459,8 @@ function hudData(p, stats, dt) {
     fovDeg: camera.fov,
     lockProgress: stats.lockProgress,
     cockpit: rig.cockpit,
+    // Aircraft without a modelled cockpit get a drawn canopy frame instead.
+    canopyFrame: rig.cockpit && !player.interior,
     invert: controls.invertPitch,
     base: { dx: BASE.x - p.x, dz: BASE.z - p.z },
     maxMissiles: def.missiles,

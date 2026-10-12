@@ -1,6 +1,14 @@
 {
-  "f16": { "rotation": [0, 90, 0] },
-  "f22": { "rotation": [0, 90, 0] },
+  "f16": {
+    "rotation": [0, 90, 0],
+    "eye": [0, 0.62, -2.95],
+    "cockpitHide": "^Glass$|-hud$"
+  },
+  "f22": {
+    "rotation": [0, 90, 0],
+    "eye": [0, 1.1, -5.3],
+    "cockpitHide": "^Glass$|-hud$"
+  },
   "b2": {
     "rotation": [0, 90, 0],
     "nozzles": [[-4.4, 0.8, 3.8], [-3.2, 0.8, 3.8], [3.2, 0.8, 3.8], [4.4, 0.8, 3.8]],
@@ -13,6 +21,7 @@
     "boundsExclude": "^ROKET_",
     "nozzles": [[-0.9, 0.75, 9.6], [0.9, 0.75, 9.6]],
     "nozzleRadius": 0.5,
-    "eye": [0, 2.3, -5.2]
+    "eye": [0, 2.2, -5.2],
+    "cockpitHide": "^MMU_Cam_Kaplama$"
   }
 }

@@ -4,6 +4,7 @@
 //   length       metres; GLB models are scaled to it
 //   hitRadius    building-collision sphere (m)
 //   eye          cockpit camera offset (aircraft frame)
+//   cockpitHide  set from models.json for GLBs with a modelled cockpit: materials hidden in cockpit view
 //   nozzles      exhaust positions for afterburner flames
 //   missiles     missile capacity (matches STATS in config.rs)
 //   gOnset       +G the crew tolerates indefinitely; the B-2 crew has no G-suit / fighter seat
