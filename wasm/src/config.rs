@@ -245,7 +245,8 @@ pub const LOCK_CONE_DEG: f32 = 30.0;
 pub const LOCK_RANGE: f32 = 5000.0;
 pub const LOCK_TIME: f32 = 0.6;
 
-pub const RESPAWN_TIME: f32 = 4.0;
+/// Long enough for the live crash view (2 s) plus the kill cam replay (replay.js).
+pub const RESPAWN_TIME: f32 = 7.5;
 pub const DEATH_PENALTY: f32 = 250.0;
 pub const FIGHTER_SCORE: f32 = 100.0;
 pub const B2_SCORE: f32 = 500.0;

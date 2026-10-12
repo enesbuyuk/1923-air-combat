@@ -1,5 +1,5 @@
 // Kill cam: a ring buffer of the last seconds of simulation state, replayed in slow
-// motion after the player is shot down.
+// motion after the player is shot down and the crash has been seen live.
 
 /** Seconds of history kept. */
 const HISTORY = 6;
@@ -7,6 +7,8 @@ const HISTORY = 6;
 const LEAD = 3;
 /** ...and runs at this share of real time. */
 const SPEED = 0.8;
+/** The crash is first shown live for this long (s); the replay follows. */
+const DELAY = 2;
 
 export class Replay {
   /** @param {number} stepsPerSecond fixed simulation rate (one snapshot per step) */
@@ -47,10 +49,21 @@ export class Replay {
     this.deathPos = pos;
     this.elapsed = 0;
     this.exploded = false;
+    this.delay = DELAY;
   }
 
   stop() {
     this.active = false;
+  }
+
+  /** Count down the live view of the crash before playback. */
+  tick(dt) {
+    this.delay -= dt;
+  }
+
+  /** The replay itself is on screen (past the live view of the crash). */
+  get playing() {
+    return this.active && this.delay <= 0;
   }
 
   /**

@@ -273,12 +273,11 @@ function handleEvent(e) {
       rig.addShake(0.4);
       break;
     case EVENT.PLAYER_DOWN:
-      // The kill cam replays the last seconds and plays the explosion at the right moment.
+      // The crash plays live first; the kill cam then replays the last seconds and
+      // shows the explosion again at the right moment.
+      effects.explosion(pos, 1.8);
+      sound.explosion(0);
       replay.start(sim.stats().time, pos);
-      if (!replay.active) {
-        effects.explosion(pos, 1.8);
-        sound.explosion(0);
-      }
       break;
     case EVENT.MISSILE_LAUNCH:
       sound.missile();
@@ -476,7 +475,7 @@ function hudData(p, stats, dt) {
     gStress: gforce.stress,
     rank: career.rank.short,
     careerKills: career.kills,
-    killcam: replay.active,
+    killcam: replay.playing,
   };
 }
 
@@ -538,8 +537,10 @@ function frame(now) {
   const live = sim.player();
   // Respawned: the kill cam is over.
   if (replay.active && live.alive) replay.stop();
+  // Shot down: the crash is shown live (wreck orbit) before the replay starts.
+  if (replay.active && state === 'play') replay.tick(frameDt);
   const alpha = state === 'play' ? accumulator / FIXED_STEP : 1;
-  if (replay.active && state === 'play') {
+  if (replay.playing && state === 'play') {
     vortices.clear();
     renderKillcam(live, frameDt);
   } else {
