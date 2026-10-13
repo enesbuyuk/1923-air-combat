@@ -5,8 +5,27 @@ use super::Game;
 use crate::config::*;
 use crate::math::{clamp, Rng, V3};
 
-/// Air density relative to sea level (ISA troposphere and lower stratosphere).
+/// Spacing (m) and extent of the density table; ISA density is smooth enough that linear
+/// interpolation at 50 m stays within 1e-4 of the formula.
+const DENSITY_STEP: f32 = 50.0;
+const DENSITY_ENTRIES: usize = 601;
+
+/// Air density relative to sea level, from a precomputed table: every bullet and aircraft
+/// asks for it every step, and `powf` / `exp` are slow in WebAssembly.
 pub fn density_ratio(h: f32) -> f32 {
+    static TABLE: std::sync::OnceLock<[f32; DENSITY_ENTRIES]> = std::sync::OnceLock::new();
+    let table = TABLE.get_or_init(|| std::array::from_fn(|i| isa_density(i as f32 * DENSITY_STEP)));
+    let x = h.max(0.0) / DENSITY_STEP;
+    let i = x as usize;
+    if i + 1 >= DENSITY_ENTRIES {
+        return isa_density(h);
+    }
+    let t = x - i as f32;
+    table[i] + (table[i + 1] - table[i]) * t
+}
+
+/// Air density relative to sea level (ISA troposphere and lower stratosphere).
+fn isa_density(h: f32) -> f32 {
     let h = h.max(0.0);
     if h < 11000.0 {
         (1.0 - 2.25577e-5 * h).powf(4.2559)
@@ -32,15 +51,19 @@ pub fn wave_drag(mach: f32) -> f32 {
     }
 }
 
-/// Parasitic drag coefficient that makes full sea-level thrust balance drag at max speed.
+/// Parasitic drag coefficient that makes full sea-level thrust (with the afterburner's
+/// ram gain) balance drag at max speed.
 pub fn drag_coefficient(s: &Stats) -> f32 {
     let v = s.max_speed;
-    (s.thrust - LINEAR_DRAG * v) / (v * v * wave_drag(v / speed_of_sound(0.0)))
+    let mach = v / speed_of_sound(0.0);
+    let thrust = s.thrust * super::aero::ram_gain(s, 1.0, mach);
+    (thrust - LINEAR_DRAG * v) / (v * v * wave_drag(mach))
 }
 
-/// Ground effect strength: 1 on the surface, 0 at GROUND_EFFECT_HEIGHT and above.
-pub fn ground_effect(h: f32) -> f32 {
-    let k = clamp(1.0 - h / GROUND_EFFECT_HEIGHT, 0.0, 1.0);
+/// Ground effect strength: 1 on the surface, 0 at GROUND_EFFECT_SPANS wingspans and above.
+/// The ground blocks the wingtip vortices, so the cushion scales with the span.
+pub fn ground_effect(h: f32, span: f32) -> f32 {
+    let k = clamp(1.0 - h / (GROUND_EFFECT_SPANS * span), 0.0, 1.0);
     k * k
 }
 
@@ -101,4 +124,9 @@ impl Game {
         let sr = 1.0 - (-dt / ROLL_SMOOTH).exp();
         w.roll += (w.roll_drive - w.roll) * sr;
     }
+}
+
+#[cfg(test)]
+pub fn isa_density_for_tests(h: f32) -> f32 {
+    isa_density(h)
 }

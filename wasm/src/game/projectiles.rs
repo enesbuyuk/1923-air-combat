@@ -11,25 +11,43 @@ use super::Game;
 use crate::config::*;
 use crate::entities::*;
 use crate::layout::{event, MAX_BOTS, MAX_FLARES};
-use crate::math::{clamp, segment_hits_sphere, V3, UP};
+use crate::math::{clamp, segment_distance, segment_hits_sphere, V3, UP};
 
-/// Bullets use a fatter hitbox against bots so the cannon feels fair at speed.
+/// Arcade: bullets use a fatter hitbox against bots so the cannon feels fair at speed.
+/// Simulator: the airframe's own size.
 const BOT_HITBOX_SCALE: f32 = 2.2;
 
+/// A live bot's hitbox, packed tight so every round can test them all without walking
+/// the full `Bot` records (cache-friendly broadphase).
+#[derive(Clone, Copy, Default)]
+struct Hull {
+    pos: V3,
+    radius: f32,
+    friendly: bool,
+    index: usize,
+}
+
 impl Game {
-    /// Reuses the first free slot; the shot is dropped when the pool is full.
+    /// Reuses the next free slot, round-robin from the last one; the shot is dropped when
+    /// the pool is full.
     pub(super) fn spawn_bullet(&mut self, pos: V3, vel: V3, owner: Owner) {
-        if let Some(b) = self.bullets.iter_mut().find(|b| b.life <= 0.0) {
-            *b = Bullet { pos, vel, life: BULLET_LIFE, owner };
+        let n = self.bullets.len();
+        for k in 0..n {
+            let i = (self.bullet_cursor + k) % n;
+            if self.bullets[i].life <= 0.0 {
+                self.bullets[i] = Bullet { pos, vel, life: BULLET_LIFE, owner };
+                self.bullet_cursor = (i + 1) % n;
+                return;
+            }
         }
     }
 
-    /// First live bot on the given side whose (scaled) hitbox the segment `a`-`b` passes through.
-    fn bot_on_segment(&self, a: V3, b: V3, friendly: bool, radius: impl Fn(&Stats) -> f32) -> Option<usize> {
-        (0..MAX_BOTS).find(|&i| {
-            let bot = &self.bots[i];
-            bot.alive && bot.friendly == friendly && segment_hits_sphere(a, b, bot.pos, radius(&STATS[bot.ty]))
-        })
+    /// First live bot on the given side whose hull the segment `a`-`b` passes through.
+    fn bot_on_segment(&self, hulls: &[Hull], a: V3, b: V3, friendly: bool) -> Option<usize> {
+        hulls
+            .iter()
+            .find(|h| h.friendly == friendly && self.bots[h.index].alive && segment_hits_sphere(a, b, h.pos, h.radius))
+            .map(|h| h.index)
     }
 
     fn ground_on_segment(&self, a: V3, b: V3, radius: f32) -> Option<usize> {
@@ -37,6 +55,15 @@ impl Game {
     }
 
     pub(super) fn update_bullets(&mut self, dt: f32) {
+        let hitbox = if self.realism { 1.0 } else { BOT_HITBOX_SCALE };
+        // Bots do not move while the rounds fly this substep: pack their hulls once.
+        let mut hulls = [Hull::default(); MAX_BOTS];
+        let mut count = 0;
+        for (i, b) in self.bots.iter().enumerate().filter(|(_, b)| b.alive) {
+            hulls[count] = Hull { pos: b.pos, radius: b.stats().radius * hitbox, friendly: b.friendly, index: i };
+            count += 1;
+        }
+        let hulls = &hulls[..count];
         for bi in 0..self.bullets.len() {
             let b = self.bullets[bi];
             if b.life <= 0.0 {
@@ -45,7 +72,7 @@ impl Game {
             let end = b.pos.add(b.vel.mul(dt));
             let hit = match b.owner {
                 Owner::Player => {
-                    if let Some(i) = self.bot_on_segment(b.pos, end, false, |s| s.radius * BOT_HITBOX_SCALE) {
+                    if let Some(i) = self.bot_on_segment(hulls, b.pos, end, false) {
                         let at = self.bots[i].pos;
                         self.damage_bot(i, BULLET_DAMAGE, at);
                         true
@@ -64,7 +91,7 @@ impl Game {
                         let at = p.pos;
                         self.damage_player(dmg, at, true);
                         true
-                    } else if let Some(i) = self.bot_on_segment(b.pos, end, true, |s| s.radius * BOT_HITBOX_SCALE) {
+                    } else if let Some(i) = self.bot_on_segment(hulls, b.pos, end, true) {
                         let at = self.bots[i].pos;
                         self.damage_bot(i, dmg, at);
                         true
@@ -75,6 +102,8 @@ impl Game {
             };
             let bl = &mut self.bullets[bi];
             bl.pos = end;
+            let v = bl.vel.len();
+            bl.vel = bl.vel.mul(1.0 - (BULLET_DRAG * density_ratio(end.y) * v * dt).min(0.5));
             bl.vel.y -= GRAVITY * dt;
             bl.life -= dt;
             if hit || bl.pos.y < 0.0 {
@@ -190,15 +219,40 @@ impl Game {
         m.pos = m.pos.add(m.vel.mul(dt));
     }
 
+    /// Proximity fuse against one target (`radius` its size): it fires at the point of
+    /// closest approach within `fuse` of the skin, or on contact, and returns the warhead's
+    /// damage share there. While the missile is still closing it waits for a closer pass.
+    fn fuse_hit(start: V3, end: V3, target: V3, radius: f32, fuse: f32) -> Option<f32> {
+        let ab = end.sub(start);
+        let l2 = ab.dot(ab);
+        let t = if l2 > 0.0 { clamp(target.sub(start).dot(ab) / l2, 0.0, 1.0) } else { 0.0 };
+        let miss = (segment_distance(start, end, target) - radius).max(0.0);
+        if miss > fuse || (t >= 1.0 && miss > 0.0) {
+            return None;
+        }
+        Some(1.0 - (1.0 - MISSILE_EDGE_DAMAGE) * clamp(miss / fuse, 0.0, 1.0))
+    }
+
+    /// First live bot on the given side the missile's fuse goes off against.
+    fn bot_fuse(&self, start: V3, end: V3, friendly: bool, fuse: f32) -> Option<(usize, f32)> {
+        (0..MAX_BOTS).find_map(|i| {
+            let b = &self.bots[i];
+            if !b.alive || b.friendly != friendly {
+                return None;
+            }
+            Self::fuse_hit(start, end, b.pos, b.stats().radius, fuse).map(|k| (i, k))
+        })
+    }
+
     /// Proximity fuse against the other side. Returns true when the missile detonated.
     fn missile_fuse(&mut self, m: &Missile, start: V3) -> bool {
         // The proximity fuse is armed by a seeker tracking a target; a missile that lost
         // its target (or chases a flare) only goes off on a near-direct hit.
-        let fuse = if matches!(m.track, Track::None | Track::Flare(_)) { 8.0 } else { MISSILE_FUSE_RADIUS };
+        let fuse = if matches!(m.track, Track::None | Track::Flare(_)) { 3.0 } else { MISSILE_FUSE_RADIUS };
         match m.owner {
             Owner::Player => {
-                if let Some(i) = self.bot_on_segment(start, m.pos, false, |s| s.radius + fuse) {
-                    self.damage_bot(i, MISSILE_DAMAGE, m.pos);
+                if let Some((i, k)) = self.bot_fuse(start, m.pos, false, fuse) {
+                    self.damage_bot(i, MISSILE_DAMAGE * k, m.pos);
                     return true;
                 }
                 if let Some(i) = self.ground_on_segment(start, m.pos, GROUND_TARGET_RADIUS + fuse) {
@@ -209,13 +263,15 @@ impl Game {
             }
             Owner::Bot => {
                 let p = &self.player;
-                let dmg = BOT_MISSILE_DAMAGE[self.difficulty];
-                if p.alive && segment_hits_sphere(start, m.pos, p.pos, p.stats().radius + fuse) {
-                    self.damage_player(dmg, m.pos, true);
-                    return true;
+                let dmg = if self.realism { SIM_MISSILE_DAMAGE } else { BOT_MISSILE_DAMAGE[self.difficulty] };
+                if p.alive {
+                    if let Some(k) = Self::fuse_hit(start, m.pos, p.pos, p.stats().radius, fuse) {
+                        self.damage_player(dmg * k, m.pos, true);
+                        return true;
+                    }
                 }
-                if let Some(i) = self.bot_on_segment(start, m.pos, true, |s| s.radius + fuse) {
-                    self.damage_bot(i, dmg, m.pos);
+                if let Some((i, k)) = self.bot_fuse(start, m.pos, true, fuse) {
+                    self.damage_bot(i, dmg * k, m.pos);
                     return true;
                 }
                 false
@@ -246,7 +302,7 @@ impl Game {
             }
             // 1 when the missile sits right behind the aircraft, staring into the exhaust.
             let tail_on = to_missile.norm().dot(heading.mul(-1.0)).max(0.0);
-            let chance = clamp(0.7 - 0.3 * tail_on - 0.3 * engine, FLARE_CHANCE_MIN, FLARE_CHANCE_MAX);
+            let chance = clamp(FLARE_CHANCE_MAX - 0.2 * tail_on - 0.2 * engine, FLARE_CHANCE_MIN, FLARE_CHANCE_MAX);
             if self.rng.next() < chance {
                 self.missiles[mi].track = Track::Flare(slot);
                 if from == Track::Player {

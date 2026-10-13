@@ -51,6 +51,10 @@ impl V3 {
     pub fn flat(self) -> V3 {
         V3::new(self.x, 0.0, self.z)
     }
+    /// Component-wise product.
+    pub fn scale(self, o: V3) -> V3 {
+        V3::new(self.x * o.x, self.y * o.y, self.z * o.z)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -79,6 +83,15 @@ impl Q {
     pub fn normalize(self) -> Q {
         let l = (self.x * self.x + self.y * self.y + self.z * self.z + self.w * self.w).sqrt();
         Q { x: self.x / l, y: self.y / l, z: self.z / l, w: self.w / l }
+    }
+    /// Time derivative of the orientation turning at body rates `w` (rad/s).
+    pub fn derivative(self, w: V3) -> Q {
+        let d = self.mul(Q { x: w.x, y: w.y, z: w.z, w: 0.0 });
+        Q { x: 0.5 * d.x, y: 0.5 * d.y, z: 0.5 * d.z, w: 0.5 * d.w }
+    }
+    /// `self + d * t`, component-wise (integration; normalize afterwards).
+    pub fn add_scaled(self, d: Q, t: f32) -> Q {
+        Q { x: self.x + d.x * t, y: self.y + d.y * t, z: self.z + d.z * t, w: self.w + d.w * t }
     }
     /// Inverse rotation (for unit quaternions).
     pub fn conj(self) -> Q {
@@ -134,13 +147,22 @@ pub fn clamp(v: f32, lo: f32, hi: f32) -> f32 {
     v.max(lo).min(hi)
 }
 
-/// Does the segment `a`-`b` pass within `r` of `c`?
+/// Does the segment `a`-`b` pass within `r` of `c`? Compares squares: no square root.
 pub fn segment_hits_sphere(a: V3, b: V3, c: V3, r: f32) -> bool {
+    segment_distance_sq(a, b, c) <= r * r
+}
+
+/// Closest distance from point `c` to the segment `a`-`b`.
+pub fn segment_distance(a: V3, b: V3, c: V3) -> f32 {
+    segment_distance_sq(a, b, c).sqrt()
+}
+
+fn segment_distance_sq(a: V3, b: V3, c: V3) -> f32 {
     let ab = b.sub(a);
     let l2 = ab.dot(ab);
     let t = if l2 > 0.0 { clamp(c.sub(a).dot(ab) / l2, 0.0, 1.0) } else { 0.0 };
-    let p = a.add(ab.mul(t));
-    p.sub(c).dot(p.sub(c)) <= r * r
+    let d = a.add(ab.mul(t)).sub(c);
+    d.dot(d)
 }
 
 /// Xorshift32: tiny, deterministic and good enough for gameplay randomness.

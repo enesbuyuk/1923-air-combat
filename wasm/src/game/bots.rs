@@ -104,7 +104,9 @@ fn pull_out_height(b: &Bot) -> f32 {
     let dive = (sink / v).min(1.0).asin();
     let n = b.stats().g_limit * 0.8;
     let radius = v * v / (GRAVITY * (n - 1.0).max(0.8));
-    radius * (1.0 - dive.cos()) + sink * RECOVERY_REACTION
+    // Stiff controls at high speed slow the roll and the pull, so it starts later.
+    let stiff = aero::control_stiffness(&b.stats(), v * b.density.sqrt());
+    radius * (1.0 - dive.cos()) + sink * RECOVERY_REACTION / stiff
 }
 
 impl Game {
@@ -137,7 +139,6 @@ impl Game {
             let speed = if is_b2 { 170.0 } else { self.rng.range(200.0, 240.0) + wave * 6.0 };
             let hp = diff.hp * if is_b2 { 120.0 } else { 40.0 + wave * 4.0 };
             let mut b = Bot::spawn(ty, pos, fwd, speed, hp);
-            b.af.thrust_scale = diff.speed;
             if !is_b2 {
                 let cap = if self.difficulty == 0 { BOT_MISSILES_EASY } else { BOT_MISSILES };
                 b.missiles = (wave - 1.0).clamp(0.0, cap);
@@ -159,7 +160,7 @@ impl Game {
 
     pub(super) fn update_bots(&mut self, dt: f32) {
         let skill = self.skill();
-        let mut shots: Vec<(V3, V3)> = Vec::new();
+        let mut shots = std::mem::take(&mut self.shots);
         for i in 0..MAX_BOTS {
             if !self.bots[i].alive {
                 continue;
@@ -189,9 +190,11 @@ impl Game {
             }
             self.bots[i] = b;
         }
-        for (pos, vel) in shots {
+        for &(pos, vel) in &shots {
             self.spawn_bullet(pos, vel, Owner::Bot);
         }
+        shots.clear();
+        self.shots = shots;
     }
 
     /// Enemy bots hunt the nearest of the player and the friendly aircraft.

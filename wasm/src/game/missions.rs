@@ -4,6 +4,7 @@
 //! - Strike: destroy every SAM site of the stage; each site locks and fires missiles at
 //!   an aircraft above its radar horizon. Fly low to stay hidden.
 //! - Escort: a friendly B-2 flies a circuit around the base; enemy fighters go for it.
+//! - Free: no enemies at all; just fly.
 
 use std::f32::consts::PI;
 
@@ -18,6 +19,7 @@ pub enum Mode {
     Waves = 0,
     Strike = 1,
     Escort = 2,
+    Free = 3,
 }
 
 impl Mode {
@@ -25,6 +27,7 @@ impl Mode {
         match i {
             1 => Mode::Strike,
             2 => Mode::Escort,
+            3 => Mode::Free,
             _ => Mode::Waves,
         }
     }
@@ -60,6 +63,7 @@ impl Game {
             Mode::Waves => 1.0,
             Mode::Strike => 0.4,
             Mode::Escort => 0.6,
+            Mode::Free => 0.0,
         }
     }
 
@@ -76,13 +80,13 @@ impl Game {
         match self.mode {
             Mode::Strike => self.ground.iter().filter(|g| g.alive).count(),
             Mode::Escort => (ESCORT_LEGS.saturating_sub(self.escort_leg)) as usize,
-            Mode::Waves => 0,
+            Mode::Waves | Mode::Free => 0,
         }
     }
 
     pub(super) fn update_mission(&mut self, dt: f32) {
         match self.mode {
-            Mode::Waves => {}
+            Mode::Waves | Mode::Free => {}
             Mode::Strike => self.update_strike(dt),
             Mode::Escort => self.update_escort(dt),
         }
@@ -232,11 +236,18 @@ impl Game {
         self.escort_leg = 0;
         self.mission_timer = 0.0;
         self.ground = [GroundTarget::NONE; MAX_GROUND];
-        for b in self.bots.iter_mut().filter(|b| b.friendly) {
+        for b in self.bots.iter_mut().filter(|b| b.friendly || mode == Mode::Free) {
             b.alive = false;
         }
+        if mode == Mode::Free {
+            // Clear the sky: enemy missiles already in flight go too.
+            for m in self.missiles.iter_mut().filter(|m| m.owner == Owner::Bot) {
+                *m = Missile::NONE;
+            }
+            self.reset_lock();
+        }
         match mode {
-            Mode::Waves => {}
+            Mode::Waves | Mode::Free => {}
             Mode::Strike => self.start_strike_stage(),
             Mode::Escort => self.start_escort(),
         }

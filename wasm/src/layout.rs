@@ -44,6 +44,9 @@ pub mod player {
     pub const SERVICE: usize = 37; // ground crew progress 0..1 while parked
     pub const MAX_MISSILES: usize = 38;
     pub const VEL: usize = 39; // x, y, z
+    pub const IN_HANGAR: usize = 42; // 1 in a hangar's service bay
+    pub const OVERSPEED: usize = 43; // equivalent airspeed past the structural limit, m/s
+    pub const LOST_IN: usize = 44; // Simulator: seconds left to return inside the area, -1 none
 }
 
 /// Bot records (MAX_BOTS).

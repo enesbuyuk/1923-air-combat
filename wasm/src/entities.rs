@@ -27,10 +27,12 @@ pub struct Airframe {
     pub density: f32,
     /// Turbulence bank offset already applied (see `Weather::roll`).
     pub bump: f32,
-    /// Current pitch and roll rates (rad/s); they ease toward the commanded rates so the
-    /// airframe has inertia.
-    pub pitch_vel: f32,
-    pub roll_vel: f32,
+    /// Body angular velocity (rad/s): x pitch (nose up +), y yaw (nose left +), z roll
+    /// (left wing down +). Integrated from the aerodynamic and gyroscopic moments.
+    pub omega: V3,
+    /// Control surface positions -1..1 (x elevator, y rudder, z ailerons), driven by the
+    /// flight control computer at a limited actuator rate.
+    pub surf: V3,
     pub gload: f32,
     pub stall: bool,
     /// Share of a full tank, 0..1. An empty tank flames the engine out.
@@ -61,8 +63,8 @@ impl Airframe {
             mach: 0.0,
             density: 1.0,
             bump: 0.0,
-            pitch_vel: 0.0,
-            roll_vel: 0.0,
+            omega: V3::new(0.0, 0.0, 0.0),
+            surf: V3::new(0.0, 0.0, 0.0),
             gload: 1.0,
             stall: false,
             fuel: START_FUEL,
@@ -86,6 +88,10 @@ impl Airframe {
     pub fn mass(&self) -> f32 {
         1.0 + FUEL_MASS * (self.fuel - 0.5)
     }
+    /// Equivalent airspeed past the structural limit (m/s), 0 within it.
+    pub fn overspeed(&self) -> f32 {
+        (self.speed * self.density.sqrt() - self.stats().max_speed * OVERSPEED_LIMIT).max(0.0)
+    }
     /// Restore fuel and systems (ground crew).
     pub fn service(&mut self) {
         self.fuel = START_FUEL;
@@ -104,6 +110,12 @@ pub struct Player {
     pub heading: V3,
     /// Nose-up pitch (radians) while on the ground: rotation before liftoff, de-rotation after touchdown.
     pub rot: f32,
+    /// Landing gear struts while on the ground: heave (m, + extended) and pitch (rad,
+    /// + nose up) of the airframe on its oleos, with their rates.
+    pub gear: f32,
+    pub gear_vel: f32,
+    pub gear_pitch: f32,
+    pub gear_pitch_vel: f32,
     pub ammo: f32,
     pub missiles: f32,
     pub flares: f32,
@@ -113,6 +125,11 @@ pub struct Player {
     pub respawn: f32,
     /// Seconds stopped on the airfield; the ground crew services the aircraft at REARM_TIME.
     pub parked: f32,
+    /// Full load (Arcade or Simulator, see `Player::loadout`).
+    pub max_ammo: f32,
+    pub max_missiles: f32,
+    /// Seconds outside the combat area (Simulator).
+    pub outside: f32,
 }
 
 impl Deref for Player {
@@ -130,26 +147,52 @@ impl DerefMut for Player {
 
 impl Player {
     /// A fresh aircraft parked at the start of runway 36.
-    pub fn on_runway(ty: usize) -> Player {
+    pub fn on_runway(ty: usize, realism: bool) -> Player {
         let s = STATS[ty];
         let dir = runway_dir();
         let start = RUNWAY_CENTER.add(dir.mul(-(RUNWAY_LENGTH * 0.5 - RUNWAY_SPAWN_INSET)));
         let pos = V3::new(start.x, GEAR_HEIGHT, start.z);
-        Player {
+        let mut p = Player {
             af: Airframe::new(ty, pos, Q::look(dir, UP), V3::default()),
             hp: s.hp,
             alive: true,
             on_ground: true,
             heading: dir,
             rot: 0.0,
-            ammo: PLAYER_AMMO,
-            missiles: s.missiles,
+            gear: 0.0,
+            gear_vel: 0.0,
+            gear_pitch: 0.0,
+            gear_pitch_vel: 0.0,
+            ammo: 0.0,
+            missiles: 0.0,
             flares: s.flares,
             gun_cd: 0.0,
             missile_cd: 0.0,
             flare_cd: 0.0,
             respawn: 0.0,
             parked: 0.0,
+            max_ammo: 0.0,
+            max_missiles: 0.0,
+            outside: 0.0,
+        };
+        p.loadout(realism, true);
+        p
+    }
+    /// Sets the full load for Arcade (generous gun) or Simulator (real rounds, a bomber
+    /// carries no air-to-air weapons); `fill` arms it, otherwise only trims the excess.
+    pub fn loadout(&mut self, realism: bool, fill: bool) {
+        let s = self.stats();
+        (self.max_ammo, self.max_missiles) = if realism {
+            (s.rounds, if s.air_to_air { s.missiles } else { 0.0 })
+        } else {
+            (PLAYER_AMMO, s.missiles)
+        };
+        if fill {
+            self.ammo = self.max_ammo;
+            self.missiles = self.max_missiles;
+        } else {
+            self.ammo = self.ammo.min(self.max_ammo);
+            self.missiles = self.missiles.min(self.max_missiles);
         }
     }
     pub fn airborne(&self) -> bool {
@@ -158,8 +201,8 @@ impl Player {
     /// Anything for the ground crew to do: weapons, fuel, hull or systems below full.
     pub fn needs_service(&self) -> bool {
         let s = self.stats();
-        self.ammo < PLAYER_AMMO
-            || self.missiles < s.missiles
+        self.ammo < self.max_ammo
+            || self.missiles < self.max_missiles
             || self.flares < s.flares
             || self.hp < s.hp
             || self.fuel < START_FUEL - 0.02
@@ -170,8 +213,8 @@ impl Player {
     /// Ground crew: full weapons, fuel and systems; hull repaired.
     pub fn rearm(&mut self) {
         let s = self.stats();
-        self.ammo = PLAYER_AMMO;
-        self.missiles = s.missiles;
+        self.ammo = self.max_ammo;
+        self.missiles = self.max_missiles;
         self.flares = s.flares;
         self.hp = s.hp;
         self.af.service();
@@ -246,8 +289,8 @@ impl Bot {
             mach: 0.0,
             density: 1.0,
             bump: 0.0,
-            pitch_vel: 0.0,
-            roll_vel: 0.0,
+            omega: V3::new(0.0, 0.0, 0.0),
+            surf: V3::new(0.0, 0.0, 0.0),
             gload: 1.0,
             stall: false,
             fuel: 0.5,

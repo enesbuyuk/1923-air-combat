@@ -35,6 +35,9 @@ pub struct Game {
     pub density: f32,
     pub difficulty: usize,
     pub(crate) mode: Mode,
+    /// Simulator realism: no aim assist, true-size hitboxes, real ammunition, strict
+    /// landing limits, no magic turn at the edge of the world, slow ground crew.
+    pub(crate) realism: bool,
     /// Mission stage (strike target areas cleared / escorts started).
     stage: u32,
     escort_leg: u32,
@@ -44,6 +47,10 @@ pub struct Game {
     lock_progress: f32,
     time: f32,
     events: Vec<f32>,
+    /// Next bullet slot to try: the pool is used round-robin, so a free slot is found at once.
+    bullet_cursor: usize,
+    /// Bot gun shots of the current step, reused so a step allocates nothing.
+    shots: Vec<(V3, V3)>,
     pub out_player: [f32; player::STRIDE],
     pub out_bots: [f32; MAX_BOTS * bot::STRIDE],
     pub out_bullets: [f32; MAX_BULLETS * bullet::STRIDE],
@@ -61,7 +68,7 @@ impl Game {
         Game {
             rng,
             input: Input::default(),
-            player: Player::on_runway(ty),
+            player: Player::on_runway(ty, false),
             bots: [Bot::DEAD; MAX_BOTS],
             bullets: [Bullet::NONE; MAX_BULLETS],
             missiles: [Missile::NONE; MAX_MISSILES],
@@ -76,6 +83,7 @@ impl Game {
             density: 1.0,
             difficulty: DEFAULT_DIFFICULTY,
             mode: Mode::Waves,
+            realism: false,
             stage: 0,
             escort_leg: 0,
             mission_timer: 0.0,
@@ -83,6 +91,8 @@ impl Game {
             lock_progress: 0.0,
             time: 0.0,
             events: Vec::with_capacity(MAX_EVENTS * event::STRIDE),
+            bullet_cursor: 0,
+            shots: Vec::with_capacity(MAX_BOTS * 2),
             out_player: [0.0; player::STRIDE],
             out_bots: [0.0; MAX_BOTS * bot::STRIDE],
             out_bullets: [0.0; MAX_BULLETS * bullet::STRIDE],
@@ -100,6 +110,18 @@ impl Game {
 
     pub fn set_mode(&mut self, mode: Mode) {
         self.start_mode(mode);
+    }
+
+    pub fn set_realism(&mut self, on: bool) {
+        self.realism = on;
+        // Parked on the runway the new load goes on at once; in the air it waits for the
+        // ground crew (only the excess is taken away).
+        let fill = self.player.on_ground && self.player.speed < 1.0;
+        self.player.loadout(on, fill);
+    }
+
+    pub(super) fn rearm_time(&self) -> f32 {
+        if self.realism { SIM_REARM_TIME } else { REARM_TIME }
     }
 
     /// Queues an event for JS; silently dropped once the buffer is full.
@@ -136,6 +158,7 @@ impl Game {
             self.update_weather(h);
             self.update_player(h);
             self.update_bots(h);
+            self.midair_collisions();
             self.update_bullets(h);
             self.update_missiles(h);
             self.update_flares(h);
@@ -146,7 +169,7 @@ impl Game {
     }
 
     fn update_wave_timer(&mut self, dt: f32) {
-        if self.bots_alive() > 0 {
+        if self.mode == Mode::Free || self.bots_alive() > 0 {
             return;
         }
         self.wave_timer -= dt;
@@ -171,6 +194,24 @@ impl Game {
         self.deaths += 1.0;
         self.score = (self.score - DEATH_PENALTY).max(0.0);
         self.event(event::PLAYER_DOWN, at, 0.0);
+    }
+
+    /// The player and a bot occupying the same airspace: both airframes are lost.
+    fn midair_collisions(&mut self) {
+        let p = &self.player;
+        if !p.airborne() {
+            return;
+        }
+        let (pos, radius) = (p.pos, p.stats().radius);
+        let hit = (0..MAX_BOTS).find(|&i| {
+            let b = &self.bots[i];
+            b.alive && b.pos.sub(pos).len() < MIDAIR_RADIUS * (radius + b.stats().radius)
+        });
+        if let Some(i) = hit {
+            let at = pos.add(self.bots[i].pos).mul(0.5);
+            self.destroy_bot(i, at, false);
+            self.kill_player(at);
+        }
     }
 
     /// Hull damage; a combat hit (`systems`) may also knock out the engine, the flight
@@ -337,6 +378,7 @@ impl Game {
     fn write_player(&mut self) {
         let p = &self.player;
         let s = p.stats();
+        let rearm_time = self.rearm_time();
         let o = &mut self.out_player;
         layout::put_v3(o, player::POS, p.pos);
         layout::put_quat(o, player::QUAT, p.q);
@@ -369,9 +411,12 @@ impl Game {
         o[player::ENGINE_HEALTH] = p.engine_health;
         o[player::CONTROL_HEALTH] = p.control_health;
         o[player::FUEL_LEAK] = p.fuel_leak;
-        o[player::SERVICE] = if p.on_ground && p.parked > 0.0 { (p.parked / REARM_TIME).min(1.0) } else { 0.0 };
-        o[player::MAX_MISSILES] = s.missiles;
+        o[player::SERVICE] = if p.on_ground && p.parked > 0.0 { (p.parked / rearm_time).min(1.0) } else { 0.0 };
+        o[player::MAX_MISSILES] = p.max_missiles;
         layout::put_v3(o, player::VEL, p.vel);
+        o[player::IN_HANGAR] = flag(in_hangar(p.pos.x, p.pos.z));
+        o[player::OVERSPEED] = p.overspeed();
+        o[player::LOST_IN] = if self.realism && p.outside > 0.0 { SIM_OUT_OF_BOUNDS_TIME - p.outside } else { -1.0 };
     }
 
     fn write_bots(&mut self) {

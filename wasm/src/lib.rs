@@ -51,11 +51,18 @@ pub extern "C" fn set_input(pitch: f32, roll: f32, yaw: f32, throttle: f32, gun:
     };
 }
 
-/// Game mode: 0 waves, 1 strike, 2 escort. Restarts the mission objectives; like the
+/// Game mode: 0 waves, 1 strike, 2 escort, 3 free flight. Restarts the mission objectives; like the
 /// density, `init` resets it to waves.
 #[no_mangle]
 pub extern "C" fn set_mode(mode: i32) {
     game().set_mode(game::Mode::from_index(mode));
+    game().write_out();
+}
+
+/// Realism: 0 Arcade, 1 Simulator (see `Game::realism`). Like the density, `init` resets it.
+#[no_mangle]
+pub extern "C" fn set_realism(on: i32) {
+    game().set_realism(on != 0);
     game().write_out();
 }
 
