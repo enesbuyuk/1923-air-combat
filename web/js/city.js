@@ -155,6 +155,7 @@ function ensure(scene, m, need, near) {
   m.cap = Math.max(16, need, m.cap * 2);
   m.mesh = new THREE.InstancedMesh(m.geo, m.mat, m.cap);
   m.mesh.frustumCulled = false; // instances surround the player
+  m.mesh.matrixAutoUpdate = false; // the mesh itself stays at the origin
   m.mesh.castShadow = near;
   m.mesh.receiveShadow = near;
   scene.add(m.mesh);
@@ -221,17 +222,18 @@ export function createCity(scene, clearRadius = Promise.resolve(0), seed = (Math
           scl.set(sh * l.s, sv * l.h * l.s, sh * l.s);
           let list = buckets.get(model);
           if (!list) buckets.set(model, (list = { near, mats: [] }));
-          list.mats.push(mat4.compose(pos, quat, scl).clone());
+          // Flat column-major floats, copied straight into the instance buffer below.
+          mat4.compose(pos, quat, scl).toArray(list.mats, list.mats.length);
         }
       }
     }
     for (const models of Object.values(sets)) {
       for (const m of models) {
         const b = buckets.get(m);
-        const count = b ? b.mats.length : 0;
+        const count = b ? b.mats.length / 16 : 0;
         if (count) ensure(scene, m, count, b.near);
         if (!m.mesh) continue;
-        for (let i = 0; i < count; i++) m.mesh.setMatrixAt(i, b.mats[i]);
+        if (count) m.mesh.instanceMatrix.array.set(b.mats);
         m.mesh.count = count;
         m.mesh.instanceMatrix.needsUpdate = true;
       }

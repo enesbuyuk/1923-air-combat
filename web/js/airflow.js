@@ -86,7 +86,9 @@ export class Airflow {
     }
 
     // Gusts: how far the air at the aircraft departs from its recent average.
-    const [wx, wy, wz] = p.wind;
+    const wx = p.wind[0];
+    const wy = p.wind[1];
+    const wz = p.wind[2];
     d.set(wx, wy, wz);
     if (!this.calm) {
       this.smoothWind.copy(d);

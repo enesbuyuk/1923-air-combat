@@ -1,5 +1,7 @@
-// Synthesised audio: jet engine, cannon, missiles, explosions, warnings. The only recorded
-// sound is the "Pull up, pull up" voice warning (web/audio/pull_up.mp3).
+// Synthesised audio: jet engine, other aircraft passing (Doppler), sonic booms, cannon,
+// missiles, explosions, warnings. Recorded sounds: the "Pull up, pull up" voice warning
+// (web/audio/pull_up.mp3) and, when present, engine and wind loops (SAMPLES) that replace
+// the synthesised layers.
 
 import { B2 } from './aircraft.js';
 
@@ -7,6 +9,16 @@ const MASTER_VOLUME = 0.6;
 const PULL_UP_URL = 'audio/pull_up.mp3';
 /** Pause (s) between repeats of the voice clip while the warning stays active. */
 const PULL_UP_GAP = 0.3;
+/**
+ * Optional seamless loops; any that is missing keeps its synthesised layer.
+ * engine: a jet engine at about mid power (pitched with the throttle);
+ * wind: broadband air rush (filtered and scaled with speed).
+ */
+const SAMPLES = { engine: 'audio/engine_loop.mp3', wind: 'audio/wind_loop.mp3' };
+/** Speed of sound (m/s) for the Doppler shift. */
+const SOUND_SPEED = 340;
+/** Other aircraft heard at once (the nearest). */
+const FLYBY_VOICES = 3;
 
 export class Sound {
   constructor() {
@@ -34,6 +46,13 @@ export class Sound {
     const d = this.noise.getChannelData(0);
     for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
 
+    // Own engine bus: inside the canopy the airframe and helmet cut the highs.
+    this.cabin = ctx.createBiquadFilter();
+    this.cabin.type = 'lowpass';
+    this.cabin.frequency.value = 20000;
+    this.engBus = ctx.createGain();
+    this.engBus.connect(this.cabin).connect(this.master);
+
     // Engine: low rumble (filtered noise) + turbine whine.
     const src = ctx.createBufferSource();
     src.buffer = this.noise;
@@ -43,8 +62,22 @@ export class Sound {
     this.engFilter.frequency.value = 300;
     this.engGain = ctx.createGain();
     this.engGain.gain.value = 0;
-    src.connect(this.engFilter).connect(this.engGain).connect(this.master);
+    src.connect(this.engFilter).connect(this.engGain).connect(this.engBus);
     src.start();
+
+    // Afterburner: a deep, ragged roar on top of the engine near full power.
+    const ab = ctx.createBufferSource();
+    ab.buffer = this.noise;
+    ab.loop = true;
+    ab.playbackRate.value = 0.35;
+    const abf = ctx.createBiquadFilter();
+    abf.type = 'lowpass';
+    abf.frequency.value = 420;
+    abf.Q.value = 1.5;
+    this.abGain = ctx.createGain();
+    this.abGain.gain.value = 0;
+    ab.connect(abf).connect(this.abGain).connect(this.engBus);
+    ab.start();
 
     this.whine = ctx.createOscillator();
     this.whine.type = 'sawtooth';
@@ -56,7 +89,7 @@ export class Sound {
     this.whineFilter = wf;
     this.whineGain = ctx.createGain();
     this.whineGain.gain.value = 0;
-    this.whine.connect(wf).connect(this.whineGain).connect(this.master);
+    this.whine.connect(wf).connect(this.whineGain).connect(this.engBus);
     this.whine.start();
 
     this.wind = ctx.createBufferSource();
@@ -87,8 +120,65 @@ export class Sound {
     this.rumbleGain.gain.value = 0;
     this.rumble.connect(rf).connect(this.rumbleGain).connect(this.master);
     this.rumble.start();
+    this.flybys = Array.from({ length: FLYBY_VOICES }, () => this.flybyVoice());
     this.lastBeep = 0;
     this.loadPullUp();
+    this.loadSamples();
+  }
+
+  /** One other aircraft: engine roar + whine, Doppler-shifted and panned. */
+  flybyVoice() {
+    const ctx = this.ctx;
+    const src = ctx.createBufferSource();
+    src.buffer = this.noise;
+    src.loop = true;
+    const roar = ctx.createBiquadFilter();
+    roar.type = 'bandpass';
+    roar.Q.value = 0.7;
+    roar.frequency.value = 500;
+    const whine = ctx.createOscillator();
+    whine.type = 'sawtooth';
+    whine.frequency.value = 900;
+    const wf = ctx.createBiquadFilter();
+    wf.type = 'bandpass';
+    wf.Q.value = 10;
+    wf.frequency.value = 2400;
+    const whineGain = ctx.createGain();
+    whineGain.gain.value = 0.08;
+    const gain = ctx.createGain();
+    gain.gain.value = 0;
+    const pan = ctx.createStereoPanner();
+    src.connect(roar).connect(gain);
+    whine.connect(wf).connect(whineGain).connect(gain);
+    gain.connect(pan).connect(this.master);
+    src.start(0, Math.random());
+    whine.start();
+    return { src, roar, whine, wf, gain, pan };
+  }
+
+  /** Fetch the optional loops; a missing file just leaves the synthesised layer in place. */
+  async loadSamples() {
+    for (const [name, url] of Object.entries(SAMPLES)) {
+      try {
+        const res = await fetch(url);
+        if (!res.ok) continue;
+        const buffer = await this.ctx.decodeAudioData(await res.arrayBuffer());
+        const s = this.ctx.createBufferSource();
+        s.buffer = buffer;
+        s.loop = true;
+        const g = this.ctx.createGain();
+        // The engine loop is faded in by engine(); the wind loop rides the wind chain's gain.
+        g.gain.value = name === 'engine' ? 0 : 1;
+        s.connect(g).connect(name === 'engine' ? this.engBus : this.windFilter);
+        s.start();
+        this.samples ??= {};
+        this.samples[name] = { source: s, gain: g };
+        // The recording takes over from the noise it replaces.
+        if (name === 'wind') this.wind.disconnect();
+      } catch {
+        // Undecodable file: keep the synthesised sound.
+      }
+    }
   }
 
   /** Fetch and decode the voice clip; without it the warning falls back to a warble tone. */
@@ -126,11 +216,20 @@ export class Sound {
     if (this.master) this.master.gain.value = this.masterGain();
   }
 
-  engine(throttle, alive, aircraftType) {
+  /** `inside`: cockpit view, where the engine is a muffled rumble behind the pilot. */
+  engine(throttle, alive, aircraftType, inside = false) {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
     const base = aircraftType === B2 ? 0.7 : 1; // the B-2 sounds deeper
-    this.engGain.gain.setTargetAtTime(alive ? 0.25 + throttle * 0.55 : 0, t, 0.1);
+    const sample = this.samples?.engine;
+    if (sample) {
+      sample.gain.gain.setTargetAtTime(alive ? 0.3 + throttle * 0.6 : 0, t, 0.1);
+      sample.source.playbackRate.setTargetAtTime((0.75 + throttle * 0.5) * base, t, 0.3);
+    }
+    this.engGain.gain.setTargetAtTime(alive ? (0.25 + throttle * 0.55) * (sample ? 0.35 : 1) : 0, t, 0.1);
+    const burner = Math.max(0, (throttle - 0.85) / 0.15);
+    this.abGain.gain.setTargetAtTime(alive ? burner * (0.45 + Math.random() * 0.15) : 0, t, 0.08);
+    this.cabin.frequency.setTargetAtTime(inside ? 700 : 20000, t, 0.3);
     this.engFilter.frequency.setTargetAtTime((180 + throttle * 900) * base, t, 0.1);
     this.whine.frequency.setTargetAtTime((300 + throttle * 900) * base, t, 0.2);
     this.whineFilter.frequency.setTargetAtTime((1200 + throttle * 2500) * base, t, 0.2);
@@ -146,9 +245,52 @@ export class Sound {
     const t = this.ctx.currentTime;
     const level = alive ? Math.min(speed / 400, 1) * 0.25 * (1 + gust * 0.6) * (inside ? 0.7 : 1) : 0;
     this.windGain.gain.setTargetAtTime(level, t, 0.15);
+    const sample = this.samples?.wind;
+    if (sample) {
+      sample.source.playbackRate.setTargetAtTime(0.8 + Math.min(speed / 400, 1) * 0.5, t, 0.3);
+    }
     this.windFilter.frequency.setTargetAtTime(400 + speed * 3 + gust * 300, t, 0.2);
     this.windMuffle.frequency.setTargetAtTime(inside ? 900 + speed * 2 : 20000, t, 0.3);
     this.rumbleGain.gain.setTargetAtTime(alive ? buffet * buffet * 0.5 : 0, t, 0.1);
+  }
+
+  /**
+   * Other aircraft nearby: `list` of { dist (m), closing (m/s, positive when approaching),
+   * pan -1..1, power 0..1, deep (B-2) }, nearest first. The pitch rises as one
+   * approaches and drops as it passes (Doppler), the level falls with distance.
+   */
+  flyby(list, inside) {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    this.flybys.forEach((v, i) => {
+      const a = list[i];
+      if (!a) {
+        v.gain.gain.setTargetAtTime(0, t, 0.2);
+        return;
+      }
+      const doppler = SOUND_SPEED / (SOUND_SPEED - Math.min(a.closing, SOUND_SPEED * 0.8));
+      const base = a.deep ? 0.6 : 1;
+      // Inverse distance, with the canopy taking the edge off.
+      const level = Math.min(1, 60 / Math.max(a.dist, 30)) * (0.35 + a.power * 0.65) * (inside ? 0.6 : 1);
+      v.gain.gain.setTargetAtTime(level * 0.9, t, 0.08);
+      v.pan.pan.setTargetAtTime(a.pan, t, 0.08);
+      v.src.playbackRate.setTargetAtTime(Math.min(4, doppler), t, 0.05);
+      v.roar.frequency.setTargetAtTime(Math.min(6000, (350 + a.power * 500) * doppler * base * (inside ? 0.6 : 1)), t, 0.05);
+      v.whine.frequency.setTargetAtTime((700 + a.power * 700) * doppler * base, t, 0.05);
+      v.wf.frequency.setTargetAtTime(Math.min(9000, 2400 * doppler * base), t, 0.05);
+    });
+  }
+
+  /**
+   * Sonic boom: the N-wave of a supersonic aircraft sweeping past, a sharp double crack
+   * ("ba-boom") with a rumble. `dist` (m) softens and dulls it; `inside` muffles it.
+   */
+  boom(dist, inside) {
+    const v = Math.max(0.1, 1 - dist / 4000) * (inside ? 0.5 : 1);
+    const bright = inside ? 600 : 2400;
+    this.burst(0.35, bright, 1.4 * v);
+    this.burst(0.35, bright, 1.2 * v, 'lowpass', 0.12);
+    this.burst(1.6, 180, 0.9 * v, 'lowpass', 0.02);
   }
 
   burst(duration, freq, gain, type = 'lowpass', when = 0) {

@@ -3,7 +3,7 @@
 import { GEAR_HEIGHT } from './sim.js';
 import { MODE } from './layout.js';
 import { drawMap } from './minimap.js';
-import { worldToGeo } from './world.js';
+import { worldToGeo, HANGARS } from './world.js';
 
 const PRIMARY = '#ff7466'; // symbology and good news
 const DANGER = '#ff2a2a';
@@ -18,6 +18,28 @@ const font = (weight, size, fam = DISPLAY) => `${weight} ${size}px ${fam}`;
 const FRIENDLY = '#7fd6ff';
 /** Below this share of the tank the HUD calls BINGO (time to head home). */
 const BINGO_FUEL = 0.2;
+
+/** Key reference rows: keys, then what they do. */
+const KEY_ROWS = [
+  [['S', 'W'], 'Pitch up / down'],
+  [['A', 'D'], 'Roll'],
+  [['Q', 'E'], 'Rudder'],
+  [['Shift'], 'Throttle up'],
+  [['Ctrl'], 'Throttle down'],
+  [['Space'], 'Cannon'],
+  [['X'], 'Missile'],
+  [['C'], 'Flares'],
+  [['B'], 'Brake / airbrake'],
+  [['V'], 'Camera'],
+  [['I'], 'Invert pitch'],
+  [['M'], 'Mute'],
+  [['Esc'], 'Pause'],
+  [['H'], 'Hide controls'],
+];
+/** Target bracket corners (x, y signs). */
+const CORNERS = [-1, -1, 1, -1, 1, 1, -1, 1];
+/** Cardinal labels on the heading tape. */
+const CARDINALS = { 0: 'N', 90: 'E', 180: 'S', 270: 'W' };
 
 /** Bearing from the nose (rad, clockwise) as a clock position: 12 ahead, 6 behind. */
 function clock(bearing) {
@@ -226,7 +248,7 @@ export class Hud {
       g.lineTo(x, y + (n % 10 === 0 ? 10 : 5));
       g.stroke();
       if (n % 10 === 0) {
-        const lbl = { 0: 'N', 90: 'E', 180: 'S', 270: 'W' }[n] ?? String(n / 10).padStart(2, '0');
+        const lbl = CARDINALS[n] ?? String(n / 10).padStart(2, '0');
         g.fillText(lbl, x, y - 8);
       }
     }
@@ -315,9 +337,13 @@ export class Hud {
     const margin = 48;
     const k = this.k;
     let nearestOff = null;
-    for (const t0 of s.targets) {
+    let offX = 0;
+    let offY = 0;
+    for (let ti = 0; ti < s.targets.length; ti++) {
+      const t = s.targets[ti];
       // Target positions arrive in CSS pixels; convert to HUD units.
-      const t = { ...t0, x: t0.x / k, y: t0.y / k };
+      const tx = t.x / k;
+      const ty = t.y / k;
       if (t.onScreen) {
         const size = Math.max(14, Math.min(60, 9000 / t.dist));
         g.strokeStyle = t.friendly ? FRIENDLY : t.locked ? (s.lockProgress >= 1 ? DANGER : WARN) : DANGER;
@@ -326,32 +352,36 @@ export class Hud {
         const hs = size / 2;
         const c = Math.max(5, size * 0.28);
         g.beginPath();
-        for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
-          g.moveTo(t.x + sx * hs, t.y + sy * (hs - c));
-          g.lineTo(t.x + sx * hs, t.y + sy * hs);
-          g.lineTo(t.x + sx * (hs - c), t.y + sy * hs);
+        for (let q = 0; q < 4; q++) {
+          const sx = CORNERS[q * 2];
+          const sy = CORNERS[q * 2 + 1];
+          g.moveTo(tx + sx * hs, ty + sy * (hs - c));
+          g.lineTo(tx + sx * hs, ty + sy * hs);
+          g.lineTo(tx + sx * (hs - c), ty + sy * hs);
         }
         g.stroke();
         g.fillStyle = g.strokeStyle;
         g.font = font(600, 12);
         g.textAlign = 'center';
-        g.fillText(`${(t.dist / 1000).toFixed(1)} km`, t.x, t.y + size / 2 + 11);
-        if (t.label) g.fillText(t.label, t.x, t.y - size / 2 - 9);
+        g.fillText(`${(t.dist / 1000).toFixed(1)} km`, tx, ty + size / 2 + 11);
+        if (t.label) g.fillText(t.label, tx, ty - size / 2 - 9);
         if (t.locked) {
           g.beginPath();
-          g.arc(t.x, t.y, size * 0.9, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * s.lockProgress);
+          g.arc(tx, ty, size * 0.9, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * s.lockProgress);
           g.stroke();
-          if (s.lockProgress >= 1) g.fillText('LOCK', t.x, t.y - size / 2 - (t.label ? 22 : 9));
+          if (s.lockProgress >= 1) g.fillText('LOCK', tx, ty - size / 2 - (t.label ? 22 : 9));
         }
         g.lineWidth = 1.5;
       } else if (!t.friendly && (!nearestOff || t.dist < nearestOff.dist)) {
         nearestOff = t;
+        offX = tx;
+        offY = ty;
       }
     }
     if (nearestOff) {
       // Arrow on the screen edge toward the nearest off-screen enemy.
-      const dx = nearestOff.x - w / 2;
-      const dy = nearestOff.y - h / 2;
+      const dx = offX - w / 2;
+      const dy = offY - h / 2;
       const a = Math.atan2(dy, dx);
       const r = Math.min(w, h) / 2 - margin;
       const x = w / 2 + Math.cos(a) * r;
@@ -485,15 +515,18 @@ export class Hud {
       const vr = Math.round(p.rotateSpeed * 3.6);
       const nearBase = Math.hypot(s.base.dx, s.base.dz) < 1200;
       if (p.service > 0 && p.service < 1) items.push([`Ground crew · rearm, refuel, repair ${Math.round(p.service * 100)}%`, PRIMARY]);
-      else if (nearBase && p.speed > 3 && p.speed < 60 && p.throttle < 0.3) items.push(['Stop with B to rearm and refuel', PRIMARY]);
+      else if (p.inHangar && p.speed > 3) items.push(['Stop with B to rearm, refuel and repair', PRIMARY]);
+      else if (nearBase && p.speed > 3 && p.speed < 60 && p.throttle < 0.3) items.push(['Taxi into a hangar to rearm, refuel and repair', PRIMARY]);
       else items.push([p.speed < p.rotateSpeed ? `Throttle up (Shift) · rotate with S at ${vr} km/h` : 'ROTATE · pull up with S', p.speed < p.rotateSpeed ? PRIMARY : WARN]);
     } else {
       if (p.stall && blink) items.push(['STALL', DANGER]);
+      if (p.overspeed && blink) items.push(['OVERSPEED', DANGER]);
       if (s.gStress > 0.25 && blink) items.push([p.gLoad < 0 ? 'NEGATIVE G' : 'OVER-G', s.gStress > 0.6 ? DANGER : WARN]);
       const agl = p.y;
       const vs = p.verticalSpeed;
       if (agl < 300 && vs < -15 && blink) items.push(['PULL UP', DANGER]);
-      if (p.outOfBounds) items.push(['LEAVING COMBAT AREA · RETURN TO BASE', WARN]);
+      if (p.lostIn >= 0) items.push([`OUTSIDE COMBAT AREA · RETURN IN ${Math.ceil(p.lostIn)} s`, DANGER]);
+      else if (p.outOfBounds) items.push(['LEAVING COMBAT AREA · RETURN TO BASE', WARN]);
       if (p.ammo <= 0) items.push(['GUN EMPTY', WARN]);
       // Approach advice when low near the airfield.
       const nearBase = Math.hypot(s.base.dx, s.base.dz) < 6000;
@@ -599,22 +632,7 @@ export class Hud {
       g.fillText('Show controls', x + 20 + kw, y + 16);
       return;
     }
-    const rows = [
-      [['S', 'W'], 'Pitch up / down'],
-      [['A', 'D'], 'Roll'],
-      [['Q', 'E'], 'Rudder'],
-      [['Shift'], 'Throttle up'],
-      [['Ctrl'], 'Throttle down'],
-      [['Space'], 'Cannon'],
-      [['X'], 'Missile'],
-      [['C'], 'Flares'],
-      [['B'], 'Brake / airbrake'],
-      [['V'], 'Camera'],
-      [['I'], 'Invert pitch'],
-      [['M'], 'Mute'],
-      [['Esc'], 'Pause'],
-      [['H'], 'Hide controls'],
-    ];
+    const rows = KEY_ROWS;
     const lh = 24;
     panel(g, x, y, 230, rows.length * lh + 18);
     rows.forEach(([keys, label], i) => {
@@ -662,11 +680,17 @@ export class Hud {
       const ry = east * sin + north * cos;
       return [x + (rx / range) * r, y - (ry / range) * r, Math.hypot(rx, ry) / range];
     };
-    // Airfield
+    // Airfield, and the hangars where the ground crew works.
     const [bx, by, bd] = plot(s.base.dx, s.base.dz);
     if (bd < 1) {
       g.fillStyle = '#fff';
       g.fillRect(bx - 3, by - 3, 6, 6);
+    }
+    g.strokeStyle = '#fff';
+    g.lineWidth = 1.5;
+    for (const [hx, hz] of HANGARS) {
+      const [px, py, d] = plot(hx - s.p.x, hz - s.p.z);
+      if (d < 1) g.strokeRect(px - 2.5, py - 2.5, 5, 5);
     }
     for (const t of s.radar) {
       let [px, py, d] = plot(t.dx, t.dz);
@@ -726,15 +750,22 @@ export class Hud {
   drawMessages(g, cx, dt) {
     g.textAlign = 'center';
     g.font = font(600, 18);
-    this.messages = this.messages.filter((m) => (m.ttl -= dt) > 0);
-    this.messages.forEach((m, i) => {
+    // Drop expired messages in place (this runs every frame).
+    let kept = 0;
+    for (let i = 0; i < this.messages.length; i++) {
+      const m = this.messages[i];
+      if ((m.ttl -= dt) > 0) this.messages[kept++] = m;
+    }
+    this.messages.length = kept;
+    for (let i = 0; i < kept; i++) {
+      const m = this.messages[i];
       const y = 112 + i * 34;
       g.globalAlpha = Math.min(1, m.ttl / 0.5);
       const tw = g.measureText(m.text).width + 36;
       panel(g, cx - tw / 2, y - 15, tw, 30, 8);
       g.fillStyle = m.color;
       g.fillText(m.text, cx, y + 1);
-    });
+    }
     g.globalAlpha = 1;
   }
 }

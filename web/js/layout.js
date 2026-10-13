@@ -37,6 +37,9 @@ export const PLAYER = {
   SERVICE: 37, // ground crew progress 0..1 while parked
   MAX_MISSILES: 38,
   VEL: 39, // x, y, z
+  IN_HANGAR: 42, // 1 in a hangar's service bay
+  OVERSPEED: 43, // equivalent airspeed past the structural limit, m/s
+  LOST_IN: 44, // Simulator: seconds left to return inside the area, -1 none
 };
 
 export const BOT = {
@@ -93,7 +96,7 @@ export const MISSION = {
 };
 
 /** Game modes (`set_mode`). */
-export const MODE = { WAVES: 0, STRIKE: 1, ESCORT: 2 };
+export const MODE = { WAVES: 0, STRIKE: 1, ESCORT: 2, FREE: 3 };
 
 export const STATS = {
   LEN: 24,

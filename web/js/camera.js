@@ -9,14 +9,38 @@ const up = new THREE.Vector3();
 const offset = new THREE.Vector3();
 const jitter = new THREE.Euler();
 const jitterQuat = new THREE.Quaternion();
+const head = new THREE.Euler(0, 0, 0, 'YXZ');
+const headQuat = new THREE.Quaternion();
+const delta = new THREE.Quaternion();
+const rate = new THREE.Vector3();
 
 /** Near plane outside / inside the cockpit; inside, the panel sits a few dm from the eye. */
 const NEAR = 0.3;
 const NEAR_COCKPIT = 0.04;
 
+/** Free look (middle mouse drag): radians per pixel, limits, and how fast it recentres. */
+const LOOK_SPEED = 0.004;
+const LOOK_YAW_MAX = 2.6;
+const LOOK_PITCH_MIN = -0.7;
+const LOOK_PITCH_MAX = 1.3;
+const LOOK_RETURN = 4;
+/**
+ * The pilot's head is not bolted to the airframe: it lags the aircraft's rotation (seconds
+ * of rate) and is pressed down in a pull (rad per G). Rotation only: moving the eye would
+ * push it through the cockpit meshes.
+ */
+const HEAD_LAG = new THREE.Vector3(0.03, 0.04, 0.02);
+const HEAD_LAG_MAX = 0.08;
+const HEAD_G_PITCH = 0.004;
+
 /** Smooth pseudo-random wobble in -1..1 (sum of incommensurate sines). */
 function wobble(t, seed) {
   return (Math.sin(t * 7.3 + seed) * 0.5 + Math.sin(t * 13.1 + seed * 2.7) * 0.3 + Math.sin(t * 23.7 + seed * 5.1) * 0.2);
+}
+
+/** Head lag (rad) for a body rate `v` (rad/s) and lag time `k` (s). */
+function lag(v, k) {
+  return THREE.MathUtils.clamp(-v * k, -HEAD_LAG_MAX, HEAD_LAG_MAX);
 }
 
 export class CameraRig {
@@ -30,11 +54,55 @@ export class CameraRig {
     // Aerodynamic buffet 0..1, fed each frame by setAir().
     this.buffet = 0;
     this.time = 0;
+    // Free look offset (rad) and whether the middle button is held.
+    this.lookYaw = 0;
+    this.lookPitch = 0;
+    this.looking = false;
+    this.gLoad = 1;
+    // Body-axis rotation rate (rad/s, filtered) for the head lag.
+    this.rate = new THREE.Vector3();
+    this.prevQuat = null;
+    addEventListener('mousedown', (e) => {
+      if (e.button !== 1) return;
+      // Middle click would start the browser's autoscroll.
+      e.preventDefault();
+      this.looking = true;
+    });
+    addEventListener('mouseup', (e) => {
+      if (e.button === 1) this.looking = false;
+    });
+    addEventListener('blur', () => { this.looking = false; });
+    addEventListener('mousemove', (e) => {
+      if (!this.looking) return;
+      this.lookYaw = THREE.MathUtils.clamp(this.lookYaw - e.movementX * LOOK_SPEED, -LOOK_YAW_MAX, LOOK_YAW_MAX);
+      this.lookPitch = THREE.MathUtils.clamp(this.lookPitch - e.movementY * LOOK_SPEED, LOOK_PITCH_MIN, LOOK_PITCH_MAX);
+    });
   }
 
-  /** Airflow feedback for the camera: `buffet` 0..1 shakes the view. */
-  setAir(buffet) {
+  /** Airflow feedback for the camera: `buffet` 0..1 shakes the view, `gLoad` weighs on the head. */
+  setAir(buffet, gLoad) {
     this.buffet = buffet;
+    this.gLoad = gLoad;
+  }
+
+  /** Free look eases back to straight ahead once the button is released. */
+  updateLook(dt) {
+    if (this.looking) return;
+    const k = 1 - Math.exp(-dt * LOOK_RETURN);
+    this.lookYaw -= this.lookYaw * k;
+    this.lookPitch -= this.lookPitch * k;
+  }
+
+  /** Filtered body-axis rotation rate from the change in attitude since the last frame. */
+  updateRate(dt) {
+    if (this.prevQuat && dt > 0) {
+      delta.copy(this.prevQuat).invert().multiply(quat);
+      if (delta.w < 0) delta.set(-delta.x, -delta.y, -delta.z, -delta.w);
+      rate.set(delta.x, delta.y, delta.z).multiplyScalar(2 / dt);
+      this.rate.lerp(rate, 1 - Math.exp(-dt * 8));
+    }
+    this.prevQuat ??= new THREE.Quaternion();
+    this.prevQuat.copy(quat);
   }
 
   zoom(direction) {
@@ -65,7 +133,7 @@ export class CameraRig {
    */
   update(p, def, inMenu, dt) {
     pos.set(p.x, p.y, p.z);
-    quat.set(...p.quat);
+    quat.fromArray(p.quat);
     fwd.set(0, 0, -1).applyQuaternion(quat);
     up.set(0, 1, 0).applyQuaternion(quat);
 
@@ -73,6 +141,8 @@ export class CameraRig {
     const freeze = window.__1923?.freeze;
     this.time += dt;
     const inside = !freeze && !inMenu && p.alive && this.cockpit;
+    this.updateLook(dt);
+    this.updateRate(dt);
     if (freeze) this.lookFrom(pos.x + freeze[0], pos.y + freeze[1], pos.z + freeze[2], pos);
     else if (inMenu) this.turntable(def, dt);
     else if (!p.alive) this.orbitWreck(dt);
@@ -145,21 +215,30 @@ export class CameraRig {
     offset.fromArray(def.eye);
     c.position.copy(pos).add(offset.applyQuaternion(quat));
     c.up.copy(up);
-    c.quaternion.copy(quat);
+    head.set(
+      this.lookPitch + lag(this.rate.x, HEAD_LAG.x) - Math.min(0.04, Math.max(0, this.gLoad - 1) * HEAD_G_PITCH),
+      this.lookYaw + lag(this.rate.y, HEAD_LAG.y),
+      lag(this.rate.z, HEAD_LAG.z),
+    );
+    c.quaternion.copy(quat).multiply(headQuat.setFromEuler(head));
   }
 
   chaseView(def, dt) {
     const c = this.camera;
     // Smooth only the offset direction, not the position: lerping the position
     // makes the camera fall tens of metres behind at combat speeds.
+    // Free look orbits the camera around the aircraft.
+    head.set(-this.lookPitch * 0.8, this.lookYaw, 0);
     const back = offset.set(0, def.length * 0.16 + 1.5, def.length * 0.75 + 4)
       .multiplyScalar(this.chaseZoom)
+      .applyEuler(head)
       .applyQuaternion(quat);
     const k = 1 - Math.exp(-dt * 6);
     if (this.chaseOffset.lengthSq() === 0) this.chaseOffset.copy(back);
     else this.chaseOffset.lerp(back, k);
     c.position.copy(pos).add(this.chaseOffset);
     c.up.lerp(up, k).normalize();
-    c.lookAt(pos.addScaledVector(fwd, def.length));
+    // Ahead of the nose normally; at the aircraft itself while orbiting with free look.
+    c.lookAt(pos.addScaledVector(fwd, def.length * Math.max(0, Math.cos(this.lookYaw)) ** 4));
   }
 }

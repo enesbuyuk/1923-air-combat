@@ -2,6 +2,7 @@
 
 import * as THREE from 'three';
 import { BULLET, MISSILE, FLARE, OWNER_PLAYER } from './layout.js';
+import { HAZE_GLSL } from './atmosphere.js';
 
 function radialTexture(stops) {
   const c = document.createElement('canvas');
@@ -19,44 +20,169 @@ function radialTexture(stops) {
 const FIRE_TEX = radialTexture([[0, 'rgba(255,255,230,1)'], [0.25, 'rgba(255,190,80,0.95)'], [0.6, 'rgba(230,80,20,0.5)'], [1, 'rgba(120,20,0,0)']]);
 const SMOKE_TEX = radialTexture([[0, 'rgba(200,200,200,0.9)'], [0.5, 'rgba(140,140,140,0.5)'], [1, 'rgba(90,90,90,0)']]);
 
-/** Fixed-size pool of camera-facing sprites (fire, smoke). */
+// Camera-facing quads for the sprite pools, all of a pool in one draw call. Same result
+// as a THREE.Sprite with `fog: true`: the quad is rotated in view space, the map is
+// multiplied by the per-puff opacity and the haze (atmosphere.js) is applied on top.
+const SPRITE_VERTEX = /* glsl */ `
+  #include <common>
+  #include <logdepthbuf_pars_vertex>
+  attribute vec3 offset;
+  attribute float size;
+  attribute float alpha;
+  attribute float spin;
+  varying vec2 vUv;
+  varying float vAlpha;
+  varying vec3 vFogOffset;
+  void main() {
+    vUv = uv;
+    vAlpha = alpha;
+    vec4 mv = viewMatrix * vec4(offset, 1.0);
+    vec2 corner = position.xy * size;
+    float c = cos(spin), s = sin(spin);
+    mv.xy += vec2(c * corner.x - s * corner.y, s * corner.x + c * corner.y);
+    gl_Position = projectionMatrix * mv;
+    #include <logdepthbuf_vertex>
+    vFogOffset = (vec4(mv.xyz, 0.0) * viewMatrix).xyz;
+  }
+`;
+const SPRITE_FRAGMENT = /* glsl */ `
+  #include <common>
+  #include <logdepthbuf_pars_fragment>
+  uniform sampler2D map;
+  varying vec2 vUv;
+  varying float vAlpha;
+  varying vec3 vFogOffset;
+  ${HAZE_GLSL}
+  void main() {
+    #include <logdepthbuf_fragment>
+    vec4 t = texture2D(map, vUv);
+    gl_FragColor = vec4(mix(t.rgb, hazeTint(normalize(vFogOffset)), hazeFactor(vFogOffset)), t.a * vAlpha);
+  }
+`;
+
+const ZERO = new THREE.Vector3();
+const camPos = new THREE.Vector3();
+const camFwd = new THREE.Vector3();
+
+/**
+ * Fixed-size pool of camera-facing sprites (fire, smoke), drawn as one instanced mesh.
+ * The live puffs are packed into the instance buffers each frame; normally blended pools
+ * are sorted back to front first, as separate sprites would be.
+ */
 class SpritePool {
   constructor(scene, tex, size, additive) {
-    this.items = [];
-    for (let i = 0; i < size; i++) {
-      const mat = new THREE.SpriteMaterial({
-        map: tex, transparent: true, depthWrite: false,
-        blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending, fog: true,
-      });
-      const s = new THREE.Sprite(mat);
-      s.visible = false;
-      s.userData = { life: 0, max: 1, grow: 1, vel: new THREE.Vector3(), base: 1 };
-      scene.add(s);
-      this.items.push(s);
-    }
+    this.size = size;
+    this.additive = additive;
+    // Per puff: position, drift (m/s), scale (m), life left / total (s), growth (1/s),
+    // starting opacity, rotation, and whether it is live.
+    this.pos = new Float32Array(size * 3);
+    this.vel = new Float32Array(size * 3);
+    this.scale = new Float32Array(size);
+    this.life = new Float32Array(size);
+    this.max = new Float32Array(size);
+    this.grow = new Float32Array(size);
+    this.base = new Float32Array(size);
+    this.rot = new Float32Array(size);
+    this.live = new Uint8Array(size);
     this.next = 0;
+    // Draw order scratch.
+    this.order = new Uint16Array(size);
+    this.depth = new Float32Array(size);
+    this.byDepth = (a, b) => this.depth[b] - this.depth[a];
+
+    const quad = new THREE.PlaneGeometry(1, 1);
+    const geo = new THREE.InstancedBufferGeometry();
+    geo.index = quad.index;
+    geo.setAttribute('position', quad.attributes.position);
+    geo.setAttribute('uv', quad.attributes.uv);
+    this.aOffset = new Float32Array(size * 3);
+    this.aSize = new Float32Array(size);
+    this.aAlpha = new Float32Array(size);
+    this.aSpin = new Float32Array(size);
+    for (const [name, arr, n] of [['offset', this.aOffset, 3], ['size', this.aSize, 1], ['alpha', this.aAlpha, 1], ['spin', this.aSpin, 1]]) {
+      geo.setAttribute(name, new THREE.InstancedBufferAttribute(arr, n).setUsage(THREE.DynamicDrawUsage));
+    }
+    geo.instanceCount = 0;
+    this.attributes = [geo.attributes.offset, geo.attributes.size, geo.attributes.alpha, geo.attributes.spin];
+    this.mesh = new THREE.Mesh(geo, new THREE.ShaderMaterial({
+      uniforms: { map: { value: tex } },
+      vertexShader: SPRITE_VERTEX,
+      fragmentShader: SPRITE_FRAGMENT,
+      transparent: true,
+      depthWrite: false,
+      blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending,
+    }));
+    this.mesh.frustumCulled = false;
+    this.mesh.visible = false;
+    this.mesh.matrixAutoUpdate = false;
+    scene.add(this.mesh);
   }
+
   spawn(pos, scale, life, grow, vel, opacity = 1) {
-    const s = this.items[this.next];
-    this.next = (this.next + 1) % this.items.length;
-    s.position.copy(pos);
-    s.scale.setScalar(scale);
-    s.visible = true;
-    s.material.opacity = opacity;
-    s.material.rotation = Math.random() * Math.PI * 2;
-    Object.assign(s.userData, { life, max: life, grow, base: opacity });
-    s.userData.vel.copy(vel || new THREE.Vector3());
-    return s;
+    const i = this.next;
+    this.next = (this.next + 1) % this.size;
+    const v = vel || ZERO;
+    this.pos[i * 3] = pos.x;
+    this.pos[i * 3 + 1] = pos.y;
+    this.pos[i * 3 + 2] = pos.z;
+    this.vel[i * 3] = v.x;
+    this.vel[i * 3 + 1] = v.y;
+    this.vel[i * 3 + 2] = v.z;
+    this.scale[i] = scale;
+    this.life[i] = this.max[i] = life;
+    this.grow[i] = grow;
+    this.base[i] = opacity;
+    this.rot[i] = Math.random() * Math.PI * 2;
+    this.live[i] = 1;
   }
+
   update(dt) {
-    for (const s of this.items) {
-      if (!s.visible) continue;
-      const u = s.userData;
-      u.life -= dt;
-      if (u.life <= 0) { s.visible = false; continue; }
-      s.position.addScaledVector(u.vel, dt);
-      s.scale.multiplyScalar(1 + u.grow * dt);
-      s.material.opacity = u.base * (u.life / u.max);
+    for (let i = 0; i < this.size; i++) {
+      if (!this.live[i]) continue;
+      this.life[i] -= dt;
+      if (this.life[i] <= 0) { this.live[i] = 0; continue; }
+      this.pos[i * 3] += this.vel[i * 3] * dt;
+      this.pos[i * 3 + 1] += this.vel[i * 3 + 1] * dt;
+      this.pos[i * 3 + 2] += this.vel[i * 3 + 2] * dt;
+      this.scale[i] *= 1 + this.grow[i] * dt;
+    }
+  }
+
+  /** Pack the live puffs into the instance buffers, farthest first unless additive. */
+  draw(camera) {
+    let n = 0;
+    const order = this.order;
+    camera.updateMatrixWorld();
+    camPos.setFromMatrixPosition(camera.matrixWorld);
+    const e = camera.matrixWorld.elements;
+    camFwd.set(-e[8], -e[9], -e[10]);
+    for (let i = 0; i < this.size; i++) {
+      if (!this.live[i]) continue;
+      order[n++] = i;
+      if (!this.additive) {
+        this.depth[i] = (this.pos[i * 3] - camPos.x) * camFwd.x
+          + (this.pos[i * 3 + 1] - camPos.y) * camFwd.y
+          + (this.pos[i * 3 + 2] - camPos.z) * camFwd.z;
+      }
+    }
+    if (!this.additive && n > 1) order.subarray(0, n).sort(this.byDepth);
+    for (let k = 0; k < n; k++) {
+      const i = order[k];
+      this.aOffset[k * 3] = this.pos[i * 3];
+      this.aOffset[k * 3 + 1] = this.pos[i * 3 + 1];
+      this.aOffset[k * 3 + 2] = this.pos[i * 3 + 2];
+      this.aSize[k] = this.scale[i];
+      this.aAlpha[k] = this.base[i] * (this.life[i] / this.max[i]);
+      this.aSpin[k] = this.rot[i];
+    }
+    const geo = this.mesh.geometry;
+    geo.instanceCount = n;
+    this.mesh.visible = n > 0;
+    if (n === 0) return;
+    for (const a of this.attributes) {
+      a.clearUpdateRanges?.();
+      a.addUpdateRange?.(0, n * a.itemSize);
+      a.needsUpdate = true;
     }
   }
 }
@@ -103,6 +229,9 @@ export class Effects {
     this._fwd = new THREE.Vector3(0, 0, -1);
     this._playerTracerColor = new THREE.Color(0xffe27a);
     this._enemyTracerColor = new THREE.Color(0xff5a3c);
+    this._e = new THREE.Vector3();
+    /** Share of trail smoke and explosion puffs spawned (quality.js lowers it on slow devices). */
+    this.density = 1;
   }
 
   /** `buf`: bullet records from the core (layout.js BULLET). */
@@ -143,7 +272,7 @@ export class Effects {
       if (!burning) continue;
       // Smoke trail while the motor burns, offset behind the nozzle; a coasting missile leaves none.
       this._p.copy(g.position).addScaledVector(this._v, -2.5);
-      this.smoke.spawn(this._p, 2.5, 2.2 + Math.random(), 1.4, null, 0.55);
+      if (this.density >= 1 || Math.random() < this.density) this.smoke.spawn(this._p, 2.5, 2.2 + Math.random(), 1.4, null, 0.55);
       if (Math.random() < 0.5) this.fire.spawn(this._p, 1.4, 0.08, 2, null, 0.9);
     }
   }
@@ -161,12 +290,13 @@ export class Effects {
   }
 
   explosion(pos, size = 1) {
-    const v = new THREE.Vector3();
-    for (let i = 0; i < 14 * size; i++) {
+    const v = this._e;
+    const k = this.density;
+    for (let i = 0; i < 14 * size * k; i++) {
       v.set(Math.random() - 0.5, Math.random() - 0.3, Math.random() - 0.5).multiplyScalar(60 * size);
       this.fire.spawn(pos, (8 + Math.random() * 10) * size, 0.6 + Math.random() * 0.6, 1.6, v, 1);
     }
-    for (let i = 0; i < 18 * size; i++) {
+    for (let i = 0; i < 18 * size * k; i++) {
       v.set(Math.random() - 0.5, Math.random() * 0.6, Math.random() - 0.5).multiplyScalar(30 * size);
       this.smoke.spawn(pos, (10 + Math.random() * 12) * size, 3 + Math.random() * 3, 0.5, v, 0.75);
     }
@@ -184,5 +314,11 @@ export class Effects {
   update(dt) {
     this.fire.update(dt);
     this.smoke.update(dt);
+  }
+
+  /** Upload the live fire and smoke for this frame; call right before rendering. */
+  draw(camera) {
+    this.fire.draw(camera);
+    this.smoke.draw(camera);
   }
 }

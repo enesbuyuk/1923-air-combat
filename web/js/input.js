@@ -6,6 +6,17 @@ import { TouchControls } from './touch.js';
 const STICK_RESPONSE = 7; // 1/s; how fast the virtual stick follows the keys
 const THROTTLE_RATE = 0.6; // full range per second
 const SCROLL_KEYS = ['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
+/** Key groups read every frame. */
+const KEYS = {
+  PITCH_UP: ['KeyS', 'ArrowDown'],
+  PITCH_DOWN: ['KeyW', 'ArrowUp'],
+  ROLL_RIGHT: ['KeyD', 'ArrowRight'],
+  ROLL_LEFT: ['KeyA', 'ArrowLeft'],
+  YAW_RIGHT: ['KeyE'],
+  YAW_LEFT: ['KeyQ'],
+  THROTTLE_UP: ['ShiftLeft', 'ShiftRight', 'KeyR'],
+  THROTTLE_DOWN: ['KeyF', 'ControlLeft', 'ControlRight'],
+};
 
 // Gamepad (W3C standard mapping).
 const PAD_DEADZONE = 0.12;
@@ -53,6 +64,7 @@ export class Controls {
     this.padButtons = [];
     this.padConnected = false;
     this.padBrake = false;
+    this.input = { pitch: 0, roll: 0, yaw: 0, throttle: 0, gun: false, missile: false, brake: false, flare: false };
     this.touch = new TouchControls({ flying, onKey, controls: this });
 
     addEventListener('keydown', (e) => {
@@ -79,7 +91,13 @@ export class Controls {
   }
 
   held(...codes) {
-    return codes.some((c) => this.keys.has(c));
+    return this.heldAny(codes);
+  }
+
+  /** Any of `codes` (an array, so per-frame checks need not build one) is down. */
+  heldAny(codes) {
+    for (let i = 0; i < codes.length; i++) if (this.keys.has(codes[i])) return true;
+    return false;
   }
 
   get brake() {
@@ -91,6 +109,10 @@ export class Controls {
     this.pitch = this.roll = this.yaw = 0;
     this.throttle = 0;
     this.touch.reset();
+  }
+
+  axis(plus, minus) {
+    return (this.heldAny(plus) ? 1 : 0) - (this.heldAny(minus) ? 1 : 0);
   }
 
   /** First connected gamepad, if any. */
@@ -105,10 +127,9 @@ export class Controls {
    * Analog sticks (gamepad, touch) override the keys while deflected.
    */
   update(dt, incapacitated) {
-    const axis = (plus, minus) => (this.held(...plus) ? 1 : 0) - (this.held(...minus) ? 1 : 0);
-    let pitch = axis(['KeyS', 'ArrowDown'], ['KeyW', 'ArrowUp']);
-    let roll = axis(['KeyD', 'ArrowRight'], ['KeyA', 'ArrowLeft']);
-    let yaw = axis(['KeyE'], ['KeyQ']);
+    let pitch = this.axis(KEYS.PITCH_UP, KEYS.PITCH_DOWN);
+    let roll = this.axis(KEYS.ROLL_RIGHT, KEYS.ROLL_LEFT);
+    let yaw = this.axis(KEYS.YAW_RIGHT, KEYS.YAW_LEFT);
     let analog = false;
     let padGun = false;
     let padFlare = false;
@@ -154,8 +175,8 @@ export class Controls {
     this.pitch += (pitch - this.pitch) * k;
     this.roll += (roll - this.roll) * k;
     this.yaw += (yaw - this.yaw) * k;
-    if (this.held('ShiftLeft', 'ShiftRight', 'KeyR')) this.throttle = Math.min(1, this.throttle + dt * THROTTLE_RATE);
-    if (this.held('KeyF', 'ControlLeft', 'ControlRight')) this.throttle = Math.max(0, this.throttle - dt * THROTTLE_RATE);
+    if (this.heldAny(KEYS.THROTTLE_UP)) this.throttle = Math.min(1, this.throttle + dt * THROTTLE_RATE);
+    if (this.heldAny(KEYS.THROTTLE_DOWN)) this.throttle = Math.max(0, this.throttle - dt * THROTTLE_RATE);
     if (t.throttleSet !== null) {
       this.throttle = t.throttleSet;
       t.throttleSet = null;
@@ -165,12 +186,20 @@ export class Controls {
     this.flare = this.keys.has('KeyC') || padFlare || t.flare;
   }
 
-  /** Snapshot for `Sim.setInput`; a queued missile is fired once and then cleared. */
+  /**
+   * Snapshot for `Sim.setInput`; a queued missile is fired once and then cleared. The
+   * same object is refilled on every call.
+   */
   consume() {
-    const input = {
-      pitch: this.pitch, roll: this.roll, yaw: this.yaw, throttle: this.throttle,
-      gun: this.gun, missile: this.missileQueued, brake: this.brake, flare: this.flare,
-    };
+    const input = this.input;
+    input.pitch = this.pitch;
+    input.roll = this.roll;
+    input.yaw = this.yaw;
+    input.throttle = this.throttle;
+    input.gun = this.gun;
+    input.missile = this.missileQueued;
+    input.brake = this.brake;
+    input.flare = this.flare;
     this.missileQueued = false;
     return input;
   }

@@ -172,6 +172,11 @@ export async function loadBuildings(scene, colliders) {
     m.receiveShadow = true;
     group.add(m);
   }
+  // Static: compute the matrices once instead of every frame.
+  group.traverse((o) => {
+    o.updateMatrix();
+    o.matrixAutoUpdate = false;
+  });
   scene.add(group);
   return radius;
 }

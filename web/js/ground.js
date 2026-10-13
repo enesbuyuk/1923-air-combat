@@ -75,21 +75,22 @@ export class GroundTargets {
    * @param {{x: number, z: number}} player  launchers track it
    */
   update(buf, player, dt) {
-    this.sites.forEach((s, i) => {
+    for (let i = 0; i < this.sites.length; i++) {
+      const s = this.sites[i];
       const o = i * GROUND.STRIDE;
       const alive = buf[o + GROUND.ALIVE] > 0;
       const hp = buf[o + GROUND.HP];
       // A slot never used this stage has no position; a destroyed site keeps its scorch.
       const used = alive || (hp <= 0 && (buf[o + GROUND.POS] !== 0 || buf[o + GROUND.POS + 2] !== 0));
       s.site.visible = used;
-      if (!used) return;
+      if (!used) continue;
       s.site.position.set(buf[o + GROUND.POS], 0, buf[o + GROUND.POS + 2]);
-      s.live.forEach((m) => { m.visible = alive; });
+      for (let k = 0; k < s.live.length; k++) s.live[k].visible = alive;
       s.scorch.visible = !alive;
-      if (!alive) return;
+      if (!alive) continue;
       s.dish.parent.rotation.y += dt * 1.5;
       this._d.set(player.x - s.site.position.x, 0, player.z - s.site.position.z);
       s.turret.rotation.y = Math.atan2(-this._d.x, -this._d.z);
-    });
+    }
   }
 }

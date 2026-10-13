@@ -18,6 +18,17 @@
       }
     }
   </script>
+  <!-- Start the critical downloads now instead of after main.js and its imports are parsed.
+       Kept after the import map, which must be seen before any module fetch. -->
+  <link rel="preload" href="1923_air.wasm" as="fetch" type="application/wasm" crossorigin />
+  <link rel="preload" href="models/models.json" as="fetch" type="application/json" crossorigin />
+  <link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" />
+  <link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/loaders/GLTFLoader.js" />
+  <link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/utils/BufferGeometryUtils.js" />
+  <link rel="modulepreload" href="js/main.js" />
+  <link rel="modulepreload" href="js/sim.js" />
+  <link rel="modulepreload" href="js/models.js" />
+  <link rel="modulepreload" href="js/world.js" />
 </head>
 <body>
   <div id="app"></div>
@@ -77,10 +88,14 @@
       <div class="settings panel">
         <span class="setting-label">Mode</span>
         <div class="segmented" data-setting="mode" role="radiogroup" aria-label="Game mode"></div>
+        <span class="setting-label">Realism</span>
+        <div class="segmented" data-setting="realism" role="radiogroup" aria-label="Realism"></div>
         <span class="setting-label">Difficulty</span>
         <div class="segmented" data-setting="difficulty" role="radiogroup" aria-label="Difficulty"></div>
         <span class="setting-label">Enemy density</span>
         <div class="segmented" data-setting="density" role="radiogroup" aria-label="Enemy density"></div>
+        <span class="setting-label">Graphics</span>
+        <div class="segmented" data-setting="graphics" role="radiogroup" aria-label="Graphics quality"></div>
         <span class="setting-label">Volume</span>
         <div class="volume"><input type="range" min="0" max="100" step="5" data-volume aria-label="Volume" /><span class="volume-value"></span></div>
       </div>
@@ -98,10 +113,14 @@
       <div class="pause-setting">
         <span class="setting-label">Mode</span>
         <div class="segmented" data-setting="mode" role="radiogroup" aria-label="Game mode"></div>
+        <span class="setting-label">Realism</span>
+        <div class="segmented" data-setting="realism" role="radiogroup" aria-label="Realism"></div>
         <span class="setting-label">Difficulty</span>
         <div class="segmented" data-setting="difficulty" role="radiogroup" aria-label="Difficulty"></div>
         <span class="setting-label">Enemy density</span>
         <div class="segmented" data-setting="density" role="radiogroup" aria-label="Enemy density"></div>
+        <span class="setting-label">Graphics</span>
+        <div class="segmented" data-setting="graphics" role="radiogroup" aria-label="Graphics quality"></div>
         <span class="setting-label">Volume</span>
         <div class="volume"><input type="range" min="0" max="100" step="5" data-volume aria-label="Volume" /><span class="volume-value"></span></div>
       </div>

@@ -12,6 +12,8 @@ export class GForce {
     this.positive = 0; // +G stress: 0 = clear vision, 1 = full blackout
     this.negative = 0; // -G stress, same scale
     this.unconscious = false;
+    /** Stress level the overlay currently shows (0 hidden), -1 before the first render. */
+    this.shown = -1;
   }
 
   get stress() {
@@ -21,7 +23,8 @@ export class GForce {
   reset() {
     this.positive = this.negative = 0;
     this.unconscious = false;
-    this.overlay.style.opacity = 0;
+    if (this.shown !== 0) this.overlay.style.opacity = 0;
+    this.shown = 0;
   }
 
   /** `g`: current load factor, `onset`: +G the crew tolerates indefinitely. */
@@ -46,9 +49,14 @@ export class GForce {
   render(a) {
     const style = this.overlay.style;
     if (a < 0.01) {
-      style.opacity = 0;
+      // Style writes restyle the page even when nothing changes, so only write on change.
+      if (this.shown !== 0) style.opacity = 0;
+      this.shown = 0;
       return;
     }
+    // A steady level (or a change too small to see) needs no restyle.
+    if (Math.abs(a - this.shown) < 0.002) return;
+    this.shown = a;
     // Eyes closing: a soft-edged elliptical opening that narrows into a
     // horizontal slit, while the whole view dims toward black.
     const close = a * a * (3 - 2 * a); // smoothstep: slow start, fast at the end

@@ -125,13 +125,20 @@ export class WingVapor {
     this.wingLevel = 0;
     this.coneLevel = 0;
     this.frameDt = 0;
+    /** Share of the full puff rate spawned (quality.js lowers it on slow devices). */
+    this.density = 1;
+    this.attributes = [geo.attributes.offset, geo.attributes.size, geo.attributes.alpha, geo.attributes.spin];
   }
 
   spawn(x, y, z, size, life, peak, vx, vy, vz, grow) {
     const i = this.next;
     this.next = (this.next + 1) % POOL;
-    this.offset.set([x, y, z], i * 3);
-    this.vel.set([vx, vy, vz], i * 3);
+    this.offset[i * 3] = x;
+    this.offset[i * 3 + 1] = y;
+    this.offset[i * 3 + 2] = z;
+    this.vel[i * 3] = vx;
+    this.vel[i * 3 + 1] = vy;
+    this.vel[i * 3 + 2] = vz;
     this.size[i] = size;
     // On a slow frame a puff must still live a few frames, or it is never seen.
     this.life[i] = this.max[i] = Math.max(life, this.frameDt * 3);
@@ -195,12 +202,12 @@ export class WingVapor {
     this.frameDt = dt;
     if (dt > 0) {
       // A long frame must not recycle puffs that are still alive.
-      this.carry = Math.min(POOL * 0.3, this.carry + WING_RATE * this.wingLevel * dt);
+      this.carry = Math.min(POOL * 0.3, this.carry + WING_RATE * this.density * this.wingLevel * dt);
       while (this.carry >= 1) {
         this.carry--;
         this.wingPuff(wing, Math.random() < 0.5 ? -1 : 1, this.wingLevel);
       }
-      this.carryCone = Math.min(POOL * 0.2, this.carryCone + CONE_RATE * this.coneLevel * dt);
+      this.carryCone = Math.min(POOL * 0.2, this.carryCone + CONE_RATE * this.density * this.coneLevel * dt);
       while (this.carryCone >= 1) {
         this.carryCone--;
         this.conePuff(wing, this.coneLevel);
@@ -226,6 +233,6 @@ export class WingVapor {
     const geo = this.mesh.geometry;
     geo.instanceCount = n;
     this.mesh.visible = n > 0;
-    for (const name of ['offset', 'size', 'alpha', 'spin']) geo.attributes[name].needsUpdate = true;
+    for (const a of this.attributes) a.needsUpdate = true;
   }
 }

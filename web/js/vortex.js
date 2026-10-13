@@ -105,7 +105,7 @@ class Rope {
 
     const geo = new THREE.BufferGeometry();
     this.vertices = new Float32Array(CAPACITY * 2 * 3);
-    this.colors = new Float32Array(CAPACITY * 2 * 4);
+    this.colors = new Float32Array(CAPACITY * 2 * 4).fill(1);
     this.uvs = new Float32Array(CAPACITY * 2 * 2);
     geo.setAttribute('position', new THREE.BufferAttribute(this.vertices, 3).setUsage(THREE.DynamicDrawUsage));
     geo.setAttribute('color', new THREE.BufferAttribute(this.colors, 4).setUsage(THREE.DynamicDrawUsage));
@@ -153,8 +153,12 @@ class Rope {
   }
 
   set(i, tip, out, vis, gamma, sink, rollup) {
-    this.pos.set([tip.x, tip.y, tip.z], i * 3);
-    this.out.set([out.x, out.y, out.z], i * 3);
+    this.pos[i * 3] = tip.x;
+    this.pos[i * 3 + 1] = tip.y;
+    this.pos[i * 3 + 2] = tip.z;
+    this.out[i * 3] = out.x;
+    this.out[i * 3 + 1] = out.y;
+    this.out[i * 3 + 2] = out.z;
     this.vis[i] = vis;
     this.gamma[i] = gamma;
     this.sink[i] = sink;
@@ -239,9 +243,14 @@ class Rope {
       v[q * 3 + 3] = tmp.x + side.x * width;
       v[q * 3 + 4] = tmp.y + side.y * width;
       v[q * 3 + 5] = tmp.z + side.z * width;
-      c.set([1, 1, 1, alpha, 1, 1, 1, alpha], q * 4);
+      // RGB stays white (set once in the constructor); only alpha changes.
+      c[q * 4 + 3] = alpha;
+      c[q * 4 + 7] = alpha;
       const u = this.odo[i] / TEX_LENGTH;
-      uv.set([u, 0, u, 1], q * 2);
+      uv[q * 2] = u;
+      uv[q * 2 + 1] = 0;
+      uv[q * 2 + 2] = u;
+      uv[q * 2 + 3] = 1;
     }
     // Ropes too weak to condense are kept (they may strengthen) but not drawn.
     this.mesh.visible = shown > 0.003;
@@ -263,7 +272,8 @@ class Wake {
   }
 
   detach() {
-    this.ropes.forEach((r) => r.detach());
+    this.ropes[0].detach();
+    this.ropes[1].detach();
     this.prevFwd = null;
   }
 
@@ -293,14 +303,14 @@ class Wake {
   }
 
   update(dt, wind, cam) {
-    for (const r of this.ropes) {
-      r.advance(dt, wind, this.span);
-      r.draw(cam);
+    for (let s = 0; s < 2; s++) {
+      this.ropes[s].advance(dt, wind, this.span);
+      this.ropes[s].draw(cam);
     }
   }
 
   get active() {
-    return this.ropes.some((r) => r.count > 0);
+    return this.ropes[0].count > 0 || this.ropes[1].count > 0;
   }
 }
 
@@ -322,6 +332,8 @@ export class Vortices {
     });
     this.player = new Wake(scene, this.material);
     this.bots = [];
+    /** Ropes are drawn for aircraft this close to the camera (m); quality.js may shorten it. */
+    this.range = RANGE;
   }
 
   wing(type) {
@@ -330,9 +342,16 @@ export class Vortices {
 
   /** Drop every rope (new game, back to the menu). */
   clear() {
-    for (const w of [this.player, ...this.bots]) {
-      w.detach();
-      w.ropes.forEach((r) => { r.count = 0; r.mesh.visible = false; });
+    // Runs every frame in the menu and the kill cam, so no temporary arrays.
+    this.clearWake(this.player);
+    for (let i = 0; i < this.bots.length; i++) if (this.bots[i]) this.clearWake(this.bots[i]);
+  }
+
+  clearWake(w) {
+    w.detach();
+    for (let s = 0; s < 2; s++) {
+      w.ropes[s].count = 0;
+      w.ropes[s].mesh.visible = false;
     }
   }
 
@@ -352,7 +371,7 @@ export class Vortices {
     if (p.alive && !p.onGround) {
       const def = AIRCRAFT[p.type];
       pos.set(p.x, p.y, p.z);
-      quat.set(...p.quat);
+      quat.fromArray(p.quat);
       this.player.feed(pos, quat, this.wing(p.type), def, p.speed, p.gLoad, p.y);
     } else {
       this.player.detach();
@@ -365,7 +384,7 @@ export class Vortices {
       const alive = buf[o + BOT.ALIVE] > 0;
       const type = buf[o + BOT.TYPE] | 0;
       pos.fromArray(buf, o + BOT.POS);
-      if (!alive || pos.distanceTo(cam) > RANGE) {
+      if (!alive || pos.distanceTo(cam) > this.range) {
         wake.detach();
         if (wake.active) wake.update(dt, wind, cam);
         continue;

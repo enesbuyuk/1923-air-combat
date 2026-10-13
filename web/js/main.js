@@ -4,14 +4,14 @@
 
 import * as THREE from 'three';
 import { AIRCRAFT, B2 } from './aircraft.js';
-import { loadAircraftModels } from './models.js';
+import { loadAircraftModels, setModelRenderer } from './models.js';
 import { buildWorld } from './world.js';
 import { Effects } from './effects.js';
 import { Hud, COLORS } from './hud.js';
 import { Sound } from './audio.js';
-import { Sim, BASE } from './sim.js';
+import { Sim, BASE, createPlayerState } from './sim.js';
 import { BOT, GROUND, EVENT, MISSION, MODE, BUILDING_HIT, groundCode } from './layout.js';
-import { applySettings, bindSettingsUi, bindVolumeUi } from './settings.js';
+import { applySettings, bindSettingsUi, bindVolumeUi, bindGraphics } from './settings.js';
 import { Controls } from './input.js';
 import { GForce } from './gforce.js';
 import { CameraRig } from './camera.js';
@@ -23,6 +23,10 @@ import { Replay } from './replay.js';
 import { Airflow } from './airflow.js';
 import { Vortices } from './vortex.js';
 import { WingVapor } from './vapor.js';
+import { Clouds } from './clouds.js';
+import { PostFx } from './post.js';
+import { Flyby } from './flyby.js';
+import { Quality } from './quality.js';
 
 /**
  * Fixed simulation step: the core always advances by exactly this much, so the outcome
@@ -33,6 +37,11 @@ const FIXED_STEP = 1 / 60;
 const MAX_STEP = 0.05;
 /** Real time simulated per frame at most, so slow devices still fly at real speed. */
 const MAX_FRAME = 0.25;
+/**
+ * Fixed steps run per frame at most. A device too slow to keep up then runs the game
+ * slower instead of spending ever longer frames catching up (the spiral of death).
+ */
+const MAX_STEPS = 5;
 /** Interpolating across a jump this long (m) would sweep the aircraft across the map (respawn). */
 const TELEPORT = 200;
 
@@ -54,6 +63,8 @@ renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+// The shadow map is re-rendered only when something in it moves (updateShadows).
+renderer.shadowMap.autoUpdate = false;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 0.9;
 $('app').appendChild(renderer.domElement);
@@ -75,15 +86,27 @@ let effects;
 let airflow;
 let vortices;
 const vapor = new WingVapor();
+const flyby = new Flyby();
+let clouds;
+let post;
+/** Mach number last frame, to catch the moment the player goes supersonic. */
+let lastMach = 0;
 let player;
 let bots;
 let groundTargets;
 let lastAmmo = 0;
 let gunSoundCooldown = 0;
-/** Unsimulated time carried to the next frame, and the state one step back for interpolation. */
+/**
+ * Unsimulated time carried to the next frame, and the state one step back for
+ * interpolation: persistent copies refilled every step, valid once a step has run.
+ */
 let accumulator = 0;
-let prevPlayer = null;
+const prevPlayer = createPlayerState();
 let prevBots = null;
+let prevValid = false;
+/** The bot records one step back, or null before the first step. */
+const previousBots = () => (prevValid ? prevBots : null);
+const quality = new Quality(applyQuality);
 const replay = new Replay(1 / FIXED_STEP);
 
 const controls = new Controls({
@@ -95,7 +118,10 @@ const controls = new Controls({
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
+  // A move to another screen can change devicePixelRatio.
+  quality.resize();
   renderer.setSize(innerWidth, innerHeight);
+  post?.setSize();
   rig.setMenuFraming(state === 'menu');
 });
 addEventListener('wheel', (e) => {
@@ -135,6 +161,8 @@ function onKey(code) {
 
 function setState(s) {
   state = s;
+  // Loading, fullscreen and the like make the first frames of a new state unrepresentative.
+  quality.restart();
   sound.setPaused(s === 'pause');
   controls.touch.setVisible(s === 'play');
   $('menu').classList.toggle('hidden', s !== 'menu');
@@ -150,7 +178,7 @@ function resetSim() {
   sim.init(selected);
   applySettings(sim);
   accumulator = 0;
-  prevPlayer = prevBots = null;
+  prevValid = false;
   replay.clear();
 }
 
@@ -200,6 +228,7 @@ document.addEventListener('fullscreenchange', () => {
 });
 document.addEventListener('visibilitychange', () => {
   if (document.hidden && state === 'play') setState('pause');
+  quality.restart();
 });
 addEventListener('beforeunload', (e) => {
   if (state === 'play' || state === 'pause') e.preventDefault();
@@ -247,8 +276,11 @@ function checkBuildings(from) {
   }
 }
 
+const eventPos = new THREE.Vector3();
+
+/** One core event; `e` is reused by Sim.forEachEvent, so nothing here keeps it. */
 function handleEvent(e) {
-  const pos = new THREE.Vector3(e.x, e.y, e.z);
+  const pos = eventPos.set(e.x, e.y, e.z);
   const distance = pos.distanceTo(camera.position);
   switch (e.type) {
     case EVENT.BOT_DESTROYED: {
@@ -277,7 +309,7 @@ function handleEvent(e) {
       // shows the explosion again at the right moment.
       effects.explosion(pos, 1.8);
       sound.explosion(0);
-      replay.start(sim.stats().time, pos);
+      replay.start(sim.time(), pos.clone());
       break;
     case EVENT.MISSILE_LAUNCH:
       sound.missile();
@@ -362,33 +394,50 @@ function simulate(frameDt) {
   const input = controls.consume();
   sim.setInput(input);
   accumulator += frameDt;
+  let steps = 0;
   while (accumulator >= FIXED_STEP) {
+    if (steps === MAX_STEPS) {
+      // Too far behind: drop the backlog, keep only the fraction for interpolation.
+      accumulator %= FIXED_STEP;
+      break;
+    }
+    steps++;
     accumulator -= FIXED_STEP;
-    const before = sim.player();
-    prevPlayer = before;
-    prevBots = Float32Array.from(sim.bots());
+    // The state one step back, copied into persistent buffers (no per-step garbage).
+    sim.player(prevPlayer);
+    const botBuf = sim.bots();
+    if (!prevBots || prevBots.length !== botBuf.length) prevBots = new Float32Array(botBuf.length);
+    prevBots.set(botBuf);
+    prevValid = true;
     sim.step(FIXED_STEP);
-    if (before.alive) checkBuildings(before);
+    if (prevPlayer.alive) checkBuildings(prevPlayer);
     // The core clears events on every step.
-    sim.events().forEach(handleEvent);
-    replay.record(sim.stats().time, sim.player(), sim.bots(), sim.missiles());
+    sim.forEachEvent(handleEvent);
+    replay.record(sim.time(), sim.playerRaw(), sim.bots(), sim.missiles());
     // A queued missile is fired on the first step only.
-    sim.setInput({ ...input, missile: false });
+    if (input.missile) {
+      input.missile = false;
+      sim.setInput(input);
+    }
   }
+  // No step this frame (high refresh rate): keep the missile queued for the next one.
+  if (input.missile) controls.missileQueued = true;
 }
+
+/** Reused result of interpolatedPlayer(). */
+const interpolated = createPlayerState();
 
 /** The player pose `alpha` of the way from the previous step to the current one. */
 function interpolatedPlayer(p, alpha) {
   const a = prevPlayer;
-  if (!a || alpha >= 1 || Math.hypot(p.x - a.x, p.y - a.y, p.z - a.z) > TELEPORT) return p;
-  hudQuat.set(...a.quat).slerp(lerpQuat.set(...p.quat), alpha);
-  return {
-    ...p,
-    x: a.x + (p.x - a.x) * alpha,
-    y: a.y + (p.y - a.y) * alpha,
-    z: a.z + (p.z - a.z) * alpha,
-    quat: [hudQuat.x, hudQuat.y, hudQuat.z, hudQuat.w],
-  };
+  if (!prevValid || alpha >= 1 || Math.hypot(p.x - a.x, p.y - a.y, p.z - a.z) > TELEPORT) return p;
+  hudQuat.fromArray(a.quat).slerp(lerpQuat.fromArray(p.quat), alpha);
+  const out = sim.player(interpolated);
+  out.x = a.x + (p.x - a.x) * alpha;
+  out.y = a.y + (p.y - a.y) * alpha;
+  out.z = a.z + (p.z - a.z) * alpha;
+  hudQuat.toArray(out.quat);
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -404,12 +453,18 @@ const toCamera = new THREE.Vector3();
 const botPos = new THREE.Vector3();
 const projected = new THREE.Vector3();
 
-/** Screen position (CSS px) of an enemy; off-screen ones are pushed out so edge arrows point right. */
-function targetOnScreen(worldPos) {
+/**
+ * Screen position (CSS px) of an enemy into `out` (x, y, onScreen); off-screen ones are
+ * pushed out so edge arrows point right.
+ */
+function targetOnScreen(worldPos, out) {
   toCamera.copy(worldPos).applyMatrix4(camera.matrixWorldInverse);
   const inFront = toCamera.z < 0;
   if (!inFront) {
-    return { x: innerWidth / 2 + toCamera.x * 1000, y: innerHeight / 2 - toCamera.y * 1000, onScreen: false };
+    out.x = innerWidth / 2 + toCamera.x * 1000;
+    out.y = innerHeight / 2 - toCamera.y * 1000;
+    out.onScreen = false;
+    return out;
   }
   projected.copy(worldPos).project(camera);
   let x = (projected.x * 0.5 + 0.5) * innerWidth;
@@ -419,11 +474,29 @@ function targetOnScreen(worldPos) {
     x = innerWidth / 2 + (x - innerWidth / 2) * 10;
     y = innerHeight / 2 + (y - innerHeight / 2) * 10;
   }
-  return { x, y, onScreen };
+  out.x = x;
+  out.y = y;
+  out.onScreen = onScreen;
+  return out;
+}
+
+// HUD input, rebuilt in place every frame: the target and radar entries are pooled.
+const hudTargets = [];
+const hudRadar = [];
+const targetPool = [];
+const radarPool = [];
+const hudState = { base: { dx: 0, dz: 0 }, targets: hudTargets, radar: hudRadar };
+
+function hudTarget(n) {
+  return (targetPool[n] ??= { x: 0, y: 0, onScreen: false, dist: 0, locked: false, b2: false, friendly: false, label: '' });
+}
+
+function hudContact(n) {
+  return (radarPool[n] ??= { dx: 0, dz: 0, locked: false, b2: false, friendly: false, ground: false });
 }
 
 function hudData(p, stats, dt) {
-  hudQuat.set(...p.quat);
+  hudQuat.fromArray(p.quat);
   hudFwd.set(0, 0, -1).applyQuaternion(hudQuat);
   hudUp.set(0, 1, 0).applyQuaternion(hudQuat);
   hudRight.set(1, 0, 0).applyQuaternion(hudQuat);
@@ -431,8 +504,7 @@ function hudData(p, stats, dt) {
 
   camera.updateMatrixWorld();
   const buf = sim.bots();
-  const targets = [];
-  const radar = [];
+  let n = 0;
   for (let i = 0; i < sim.maxBots; i++) {
     const o = i * BOT.STRIDE;
     if (buf[o + BOT.ALIVE] <= 0) continue;
@@ -440,10 +512,21 @@ function hudData(p, stats, dt) {
     const locked = i === stats.lockTarget;
     const b2 = (buf[o + BOT.TYPE] | 0) === B2;
     const friendly = buf[o + BOT.FRIENDLY] > 0;
-    const label = friendly ? 'ESCORT' : b2 ? 'B-2' : '';
-    const dist = Math.hypot(botPos.x - p.x, botPos.y - p.y, botPos.z - p.z);
-    radar.push({ dx: botPos.x - p.x, dz: botPos.z - p.z, locked, b2, friendly });
-    targets.push({ ...targetOnScreen(botPos), dist, locked, b2, friendly, label });
+    const r = hudContact(n);
+    r.dx = botPos.x - p.x;
+    r.dz = botPos.z - p.z;
+    r.locked = locked;
+    r.b2 = b2;
+    r.friendly = friendly;
+    r.ground = false;
+    const t = targetOnScreen(botPos, hudTarget(n));
+    t.dist = Math.hypot(botPos.x - p.x, botPos.y - p.y, botPos.z - p.z);
+    t.locked = locked;
+    t.b2 = b2;
+    t.friendly = friendly;
+    t.label = friendly ? 'ESCORT' : b2 ? 'B-2' : '';
+    hudRadar[n] = r;
+    hudTargets[n++] = t;
   }
   const gbuf = sim.ground();
   for (let i = 0; i < sim.maxGround; i++) {
@@ -451,32 +534,46 @@ function hudData(p, stats, dt) {
     if (gbuf[o + GROUND.ALIVE] <= 0) continue;
     botPos.fromArray(gbuf, o + GROUND.POS);
     const locked = stats.lockTarget === groundCode(i);
-    const dist = Math.hypot(botPos.x - p.x, botPos.y - p.y, botPos.z - p.z);
-    radar.push({ dx: botPos.x - p.x, dz: botPos.z - p.z, locked, ground: true });
-    targets.push({ ...targetOnScreen(botPos), dist, locked, label: 'SAM' });
+    const r = hudContact(n);
+    r.dx = botPos.x - p.x;
+    r.dz = botPos.z - p.z;
+    r.locked = locked;
+    r.b2 = r.friendly = false;
+    r.ground = true;
+    const t = targetOnScreen(botPos, hudTarget(n));
+    t.dist = Math.hypot(botPos.x - p.x, botPos.y - p.y, botPos.z - p.z);
+    t.locked = locked;
+    t.b2 = t.friendly = false;
+    t.label = 'SAM';
+    hudRadar[n] = r;
+    hudTargets[n++] = t;
   }
+  hudTargets.length = hudRadar.length = n;
   const def = AIRCRAFT[p.type];
-  return {
-    p, stats, dt, targets, radar,
-    pitchDeg: deg(Math.asin(THREE.MathUtils.clamp(hudFwd.y, -1, 1))),
-    bankDeg: deg(Math.atan2(-hudRight.y, hudUp.y)),
-    headingDeg: (deg(Math.atan2(hudFwd.x, -hudFwd.z)) + 360) % 360,
-    fovDeg: camera.fov,
-    lockProgress: stats.lockProgress,
-    cockpit: rig.cockpit,
-    // Aircraft without a modelled cockpit get a drawn canopy frame instead.
-    canopyFrame: rig.cockpit && !player.interior,
-    invert: controls.invertPitch,
-    base: { dx: BASE.x - p.x, dz: BASE.z - p.z },
-    maxMissiles: def.missiles,
-    aircraftName: def.name,
-    gearDown: player.gearDown,
-    airbrake: controls.brake && !p.onGround,
-    gStress: gforce.stress,
-    rank: career.rank.short,
-    careerKills: career.kills,
-    killcam: replay.playing,
-  };
+  const s = hudState;
+  s.p = p;
+  s.stats = stats;
+  s.dt = dt;
+  s.pitchDeg = deg(Math.asin(THREE.MathUtils.clamp(hudFwd.y, -1, 1)));
+  s.bankDeg = deg(Math.atan2(-hudRight.y, hudUp.y));
+  s.headingDeg = (deg(Math.atan2(hudFwd.x, -hudFwd.z)) + 360) % 360;
+  s.fovDeg = camera.fov;
+  s.lockProgress = stats.lockProgress;
+  s.cockpit = rig.cockpit;
+  // Aircraft without a modelled cockpit get a drawn canopy frame instead.
+  s.canopyFrame = rig.cockpit && !player.interior;
+  s.invert = controls.invertPitch;
+  s.base.dx = BASE.x - p.x;
+  s.base.dz = BASE.z - p.z;
+  s.maxMissiles = def.missiles;
+  s.aircraftName = def.name;
+  s.gearDown = player.gearDown;
+  s.airbrake = controls.brake && !p.onGround;
+  s.gStress = gforce.stress;
+  s.rank = career.rank.short;
+  s.careerKills = career.kills;
+  s.killcam = replay.playing;
+  return s;
 }
 
 // ---------------------------------------------------------------------------
@@ -486,7 +583,11 @@ function hudData(p, stats, dt) {
 /** Per-frame feedback while flying: sounds, smoke, FOV, G effects and the HUD. */
 function updateCockpit(p, stats, dt, frameDt, now) {
   if (!p.alive) controls.throttle = 0;
-  sound.engine(p.engine, p.alive, p.type);
+  sound.engine(p.engine, p.alive, p.type, rig.cockpit);
+  flyby.update(sim.bots(), previousBots(), sim.maxBots, FIXED_STEP, camera, p.vel, sound, rig.cockpit);
+  // Going supersonic: the shock passing over the airframe, a dull thump in the cockpit.
+  if (p.alive && lastMach < 1 && p.mach >= 1) sound.boom(0, rig.cockpit);
+  lastMach = p.mach;
   sound.airflow(p.speed, airflow.gust, airflow.buffet, rig.cockpit, p.alive);
   // Cannon sound follows actual rounds fired.
   if (p.ammo < lastAmmo) {
@@ -518,20 +619,127 @@ function renderKillcam(live, frameDt) {
     effects.explosion(replay.deathPos, 1.8);
     sound.explosion(0);
   }
-  player.update(dead ? { ...f.player, alive: false } : f.player, false);
+  // f.player is the replay's own copy, decoded afresh on every advance(): safe to edit.
+  if (dead) f.player.alive = false;
+  player.update(f.player, false);
   bots.update(f.bots, sim.maxBots);
   effects.updateTracers(sim.bullets(), 0);
   effects.updateMissiles(f.missiles, sim.maxMissiles);
   rig.killcamView(f.player, AIRCRAFT[f.player.type], dead ? replay.deathPos : null, frameDt);
 }
 
+/** Nothing to hear (menu): one shared empty list instead of a new one per frame. */
+const NO_FLYBYS = [];
+
+// ---------------------------------------------------------------------------
+// Shadows and quality
+// ---------------------------------------------------------------------------
+
+/**
+ * The shadow map is only re-rendered when it can have changed: the light moved with the
+ * player, the player's aircraft moved, changed or was hidden, or something that moves is
+ * near enough to cast into it. A slow refresh catches scenery that streams in (hangars,
+ * city chunks). Flying, it still updates every frame; parked, in the menu or paused it
+ * mostly does not.
+ */
+const SHADOW_REFRESH = 0.5;
+/** Bots and SAM sites this close (m) to the player may cast into the shadow map. */
+const SHADOW_MOVERS = 300;
+const shadowPos = new THREE.Vector3();
+const shadowQuat = new THREE.Quaternion();
+let shadowGroup = null;
+let shadowVisible = false;
+let shadowGear = false;
+let shadowAge = Infinity;
+let shadowDirty = true;
+
+function moversNear(pos) {
+  const r2 = SHADOW_MOVERS * SHADOW_MOVERS;
+  const buf = sim.bots();
+  for (let i = 0; i < sim.maxBots; i++) {
+    const o = i * BOT.STRIDE;
+    if (buf[o + BOT.ALIVE] <= 0) continue;
+    const dx = buf[o + BOT.POS] - pos.x;
+    const dy = buf[o + BOT.POS + 1] - pos.y;
+    const dz = buf[o + BOT.POS + 2] - pos.z;
+    if (dx * dx + dy * dy + dz * dz < r2) return true;
+  }
+  const gbuf = sim.ground();
+  for (let i = 0; i < sim.maxGround; i++) {
+    const o = i * GROUND.STRIDE;
+    if (gbuf[o + GROUND.ALIVE] <= 0) continue;
+    const dx = gbuf[o + GROUND.POS] - pos.x;
+    const dz = gbuf[o + GROUND.POS + 2] - pos.z;
+    if (dx * dx + dz * dz < r2) return true;
+  }
+  return false;
+}
+
+function updateShadows(lightMoved, dt) {
+  const g = player.group;
+  shadowAge += dt;
+  const dirty = shadowDirty || lightMoved || shadowAge >= SHADOW_REFRESH
+    || g !== shadowGroup || g.visible !== shadowVisible || player.gearDown !== shadowGear
+    || !g.position.equals(shadowPos) || !g.quaternion.equals(shadowQuat)
+    || moversNear(g.position);
+  if (!dirty) return;
+  renderer.shadowMap.needsUpdate = true;
+  shadowDirty = false;
+  shadowAge = 0;
+  shadowGroup = g;
+  shadowVisible = g.visible;
+  shadowGear = player.gearDown;
+  shadowPos.copy(g.position);
+  shadowQuat.copy(g.quaternion);
+}
+
+/** Quality hook (quality.js): resolution, shadows, post-processing and effect density. */
+function applyQuality({ ratio, settings }) {
+  if (renderer.getPixelRatio() !== ratio) {
+    renderer.setPixelRatio(ratio);
+    post?.setSize();
+  }
+  if (!world) return;
+  world.setShadowQuality(settings.shadowSize);
+  post.setQuality(settings);
+  clouds.setDensity(settings.clouds);
+  vapor.density = settings.effects;
+  effects.density = settings.effects;
+  vortices.range = settings.vortexRange;
+  shadowDirty = true;
+}
+
+/**
+ * Compile every material in the scene now (missiles, explosions, tracers, vapor and the
+ * rest that are hidden in the menu), so their first appearance in a fight does not stall
+ * a frame. The scene is compiled into the post-processing target, as RenderPass renders
+ * it, so the programs match the ones used later.
+ */
+async function precompile() {
+  let ready = null;
+  renderer.setRenderTarget(post.composer.readBuffer);
+  try {
+    // Without parallel compilation compileAsync only adds polling (and a console warning).
+    const parallel = renderer.compileAsync && renderer.extensions.has('KHR_parallel_shader_compile');
+    ready = parallel ? renderer.compileAsync(scene, camera) : renderer.compile(scene, camera);
+    // The vapor joins the aircraft model on its first update.
+    renderer.compile(vapor.mesh, camera, scene);
+  } finally {
+    renderer.setRenderTarget(null);
+  }
+  await ready;
+}
+
 let last = performance.now();
 function frame(now) {
   requestAnimationFrame(frame);
-  const frameDt = Math.min(MAX_FRAME, (now - last) / 1000);
+  const elapsed = now - last;
+  const frameDt = Math.min(MAX_FRAME, elapsed / 1000);
   const dt = Math.min(MAX_STEP, frameDt);
   last = now;
-  if (state === 'loading') return;
+  // Browsers mostly stop animation frames in hidden tabs; where they do not, skip the work.
+  if (state === 'loading' || document.hidden) return;
+  quality.sample(elapsed, state === 'play' || state === 'menu');
 
   if (state === 'play') simulate(frameDt);
   const live = sim.player();
@@ -547,17 +755,20 @@ function frame(now) {
     const p = interpolatedPlayer(live, alpha);
     player.update(p, state === 'play' && rig.cockpit);
     if (state !== 'pause') {
-      bots.update(sim.bots(), sim.maxBots, prevBots, alpha);
+      bots.update(sim.bots(), sim.maxBots, previousBots(), alpha);
       effects.updateTracers(sim.bullets(), sim.maxBullets);
       effects.updateMissiles(sim.missiles(), sim.maxMissiles);
     }
-    rig.setAir(state === 'play' ? airflow.buffet : 0);
+    rig.setAir(state === 'play' ? airflow.buffet : 0, p.gLoad);
     rig.update(p, AIRCRAFT[p.type], state === 'menu', dt);
     // Wingtip vortices and wing vapor freeze while paused.
     const wakeDt = state === 'play' ? frameDt : 0;
     if (state === 'menu') vortices.clear();
-    else vortices.update(p, sim.bots(), prevBots, alpha, FIXED_STEP, sim.maxBots, camera.position, wakeDt);
+    else vortices.update(p, sim.bots(), previousBots(), alpha, FIXED_STEP, sim.maxBots, camera.position, wakeDt);
     vapor.update(p, player.group, vortices.wing(p.type), state === 'play', wakeDt);
+    clouds.update(camera.position, state === 'pause' ? 0 : frameDt);
+    post.begin(state === 'pause' ? 0 : frameDt, clouds.inside);
+    if (!rig.cockpit || state !== 'play') exhaustShimmer(p);
   }
   const flying = (state === 'play' || state === 'pause') && !replay.active;
   airflow.update(live, camera.position, flying, state === 'pause' ? 0 : frameDt);
@@ -566,12 +777,36 @@ function frame(now) {
     groundTargets.update(sim.ground(), live, frameDt);
     effects.update(frameDt);
   }
-  world.follow(player.group.position);
+  const lightMoved = world.follow(player.group.position);
 
   if (state === 'play') updateCockpit(live, sim.stats(), dt, frameDt, now);
   else sound.pullUp(false);
-  if (state !== 'play' && state !== 'pause') gforce.reset();
-  renderer.render(scene, camera);
+  if (state !== 'play' && state !== 'pause') {
+    gforce.reset();
+    sound.flyby(NO_FLYBYS, false);
+  }
+  updateShadows(lightMoved, frameDt);
+  effects.draw(camera);
+  post.render();
+}
+
+const nozzleStart = new THREE.Vector3();
+const nozzleEnd = new THREE.Vector3();
+
+/** Heat shimmer behind the player's nozzles, longer and stronger with engine power. */
+function exhaustShimmer(p) {
+  if (!p.alive || p.engine < 0.1) return;
+  const def = AIRCRAFT[p.type];
+  const length = 10 + p.engine * 30;
+  const strength = THREE.MathUtils.smoothstep(p.engine, 0.1, 1);
+  player.group.updateMatrixWorld();
+  camera.updateMatrixWorld();
+  for (let i = 0; i < def.nozzles.length; i++) {
+    const n = def.nozzles[i];
+    player.group.localToWorld(nozzleStart.set(n[0], n[1], n[2]));
+    player.group.localToWorld(nozzleEnd.set(n[0], n[1], n[2] + length));
+    post.plume(nozzleStart, nozzleEnd, def.nozzleRadius, strength);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -592,10 +827,12 @@ async function waitForTiles(tiles) {
 
 async function boot() {
   try {
-    progress(0.1, 'Loading WASM core…');
-    sim = await Sim.load();
-    progress(0.3, 'Preparing aircraft models…');
-    const models = await loadAircraftModels();
+    progress(0.1, 'Loading WASM core and aircraft models…');
+    setModelRenderer(renderer);
+    // Independent downloads: fetch the core and the model catalogue in parallel.
+    const [loadedSim, models] = await Promise.all([Sim.load(), loadAircraftModels()]);
+    sim = loadedSim;
+    models.onProgress = (key, loaded, total) => progress(0.4 + 0.35 * loaded / (total || 1));
     // Only the preselected aircraft's GLB now; the rest download when picked or met in the air.
     progress(0.4, `Model: ${AIRCRAFT[selected].name}`);
     await models.load(AIRCRAFT[selected].key);
@@ -606,6 +843,8 @@ async function boot() {
     world = buildWorld(scene, renderer);
     effects = new Effects(scene, sim.maxBullets, sim.maxMissiles);
     airflow = new Airflow(scene);
+    clouds = new Clouds(scene);
+    post = new PostFx(renderer, scene, camera);
     vortices = new Vortices(scene, models);
     player = new PlayerAircraft(scene, models);
     bots = new BotAircraft(scene, models, effects);
@@ -613,11 +852,20 @@ async function boot() {
     menu = new Menu(models, selectAircraft, startGame);
     bindSettingsUi(sim);
     bindVolumeUi(sound);
+    bindGraphics((mode) => quality.setMode(mode));
     selectAircraft(selected);
     await waitForTiles(world.tiles);
+    try {
+      await precompile();
+    } catch (e) {
+      // Only a head start: anything left compiles on first use as before.
+      console.warn('Shader precompile failed', e);
+    }
     progress(1, 'Ready');
-    window.__1923 = { sim, world, camera, scene, controls, airflow, vortices, vapor };
+    window.__1923 = { sim, world, camera, scene, controls, airflow, vortices, vapor, clouds, post, rig, quality, renderer, effects };
     setState('menu');
+    // Remaining aircraft download one by one while the player sits in the menu.
+    models.prefetchIdle();
   } catch (e) {
     console.error(e);
     loadingText.textContent = `Load failed: ${e.message}. Serve the folder over HTTP (./build.sh serve) and reload.`;

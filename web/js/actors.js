@@ -56,8 +56,14 @@ export class PlayerAircraft {
 
   /** Show only aircraft `type` (menu preview). */
   select(type) {
-    this.current = this.variant(type);
-    this.variants.forEach((v, i) => { if (v) v.group.visible = i === type; });
+    const v = this.variant(type);
+    // Called every frame: only touch the other variants when the shown one changes.
+    if (v === this.current) return;
+    this.current = v;
+    for (let i = 0; i < this.variants.length; i++) {
+      const other = this.variants[i];
+      if (other) other.group.visible = i === type;
+    }
   }
 
   /**
@@ -69,9 +75,9 @@ export class PlayerAircraft {
     this.select(p.type);
     const v = this.current;
     this.group.visible = p.alive && (!cockpit || v.interior);
-    v.glass.forEach((o) => { o.visible = !cockpit; });
+    for (let i = 0; i < v.glass.length; i++) v.glass[i].visible = !cockpit;
     this.group.position.set(p.x, p.y, p.z);
-    this.group.quaternion.set(...p.quat);
+    this.group.quaternion.fromArray(p.quat);
     this.updateGear(p);
     this.updateFlames(p);
   }
@@ -91,10 +97,12 @@ export class PlayerAircraft {
     const max = THREE.MathUtils.smoothstep(th, 0.85, 1);
     const stretch = p.type === B2 ? 2 : 7;
     for (const f of this.current.flames) {
-      const [core, tail] = f.children;
+      const core = f.children[0];
+      const tail = f.children[1];
       f.visible = p.alive && th > 0.05;
-      f.material.color.lerpColors(FLAME_LOW, FLAME_HIGH, heat);
-      core.material.color.lerpColors(CORE_LOW, CORE_HIGH, heat).lerp(CORE_MAX, max);
+      // Brighter than white at full power, so the afterburner blooms (post.js).
+      f.material.color.lerpColors(FLAME_LOW, FLAME_HIGH, heat).multiplyScalar(1 + heat * 1.5);
+      core.material.color.lerpColors(CORE_LOW, CORE_HIGH, heat).lerp(CORE_MAX, max).multiplyScalar(1 + heat * 2.5);
       tail.material.opacity = max;
       f.scale.set(0.7 + th * 0.4, 0.6 + th * th * stretch * (0.9 + Math.random() * 0.2), 0.7 + th * 0.4);
     }
@@ -141,7 +149,10 @@ export class BotAircraft {
       const type = buf[o + BOT.TYPE] | 0;
       const friendly = buf[o + BOT.FRIENDLY] > 0;
       const key = type * 2 + (friendly ? 1 : 0);
-      this.slots[i]?.forEach((m, k) => { if (m) m.visible = alive && k === key; });
+      const variants = this.slots[i];
+      if (variants) {
+        for (let k = 0; k < variants.length; k++) if (variants[k]) variants[k].visible = alive && k === key;
+      }
       if (!alive) continue;
       const m = this.model(i, type, friendly);
       m.visible = true;

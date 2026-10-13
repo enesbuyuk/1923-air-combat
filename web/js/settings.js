@@ -1,8 +1,10 @@
-// Game settings passed to the WASM core (enemies, game mode). The chosen option index is
-// remembered per browser and rendered as segmented radio buttons in every
-// `[data-setting="<name>"]` element.
+// Game settings passed to the WASM core (enemies, game mode) and the graphics quality
+// (quality.js). The chosen option index is remembered per browser and rendered as
+// segmented radio buttons in every `[data-setting="<name>"]` element.
 
 const STORAGE_PREFIX = '1923.';
+/** Receives the graphics setting (-1 auto, else a quality tier), see bindGraphics(). */
+let graphicsHook = null;
 
 const SETTINGS = {
   // Multiplies wave size and shortens the gap between waves.
@@ -26,16 +28,39 @@ const SETTINGS = {
     index: 1,
     apply: (sim, v) => sim.setDifficulty(v),
   },
-  // Game mode (layout.js MODE): endless waves, SAM-site strike or bomber escort.
+  // Simulator: no aim assist, true-size hitboxes, real ammunition, strict landing limits,
+  // no turn back at the edge of the area, slow ground crew, lethal missiles.
+  realism: {
+    options: [
+      { label: 'Arcade', value: 0 },
+      { label: 'Simulator', value: 1 },
+    ],
+    index: 0,
+    apply: (sim, v) => sim.setRealism(v),
+  },
+  // Game mode (layout.js MODE): endless waves, SAM-site strike, bomber escort or free flight.
   // Changing it mid-flight restarts the mission objectives.
   mode: {
     options: [
       { label: 'Waves', value: 0 },
       { label: 'Strike', value: 1 },
       { label: 'Escort', value: 2 },
+      { label: 'Free', value: 3 },
     ],
     index: 0,
     apply: (sim, v) => sim.setMode(v),
+  },
+  // Graphics quality: Auto adapts resolution and effects to the frame rate (quality.js);
+  // the others fix a tier. Not a core setting: it goes to the hook set by bindGraphics().
+  graphics: {
+    options: [
+      { label: 'Auto', value: -1 },
+      { label: 'Low', value: 0 },
+      { label: 'Medium', value: 1 },
+      { label: 'High', value: 2 },
+    ],
+    index: 0,
+    apply: (_sim, v) => graphicsHook?.(v),
   },
 };
 
@@ -74,6 +99,13 @@ function select(sim, name, index) {
   document.querySelectorAll(`[data-setting="${name}"] button`).forEach((b) => {
     b.setAttribute('aria-checked', String(Number(b.dataset.i) === index));
   });
+}
+
+/** Route the graphics setting to `hook(value)`, starting with the saved choice. */
+export function bindGraphics(hook) {
+  graphicsHook = hook;
+  const s = SETTINGS.graphics;
+  hook(s.options[s.index].value);
 }
 
 // Master volume (0..100 %), kept apart from SETTINGS because it drives the audio, not the core.

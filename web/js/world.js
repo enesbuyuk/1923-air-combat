@@ -1,17 +1,31 @@
 // Istanbul / 1923 environment: satellite imagery ground, OSM-derived
-// runways and aprons, OSM buildings, a streaming procedural city, sky and lighting.
+// runways and aprons, OSM buildings, a streaming procedural city and lighting
+// (sky and haze: atmosphere.js).
 
 import * as THREE from 'three';
-import { Sky } from 'three/addons/objects/Sky.js';
+import { buildAtmosphere } from './atmosphere.js';
 import { createCity } from './city.js';
 import { loadBuildings } from './buildings.js';
-import { FootprintGrid } from './collision.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { FootprintGrid, footprint } from './collision.js';
 
 // Reference point (world origin) near the LTBX aerodrome reference point.
 const LAT0 = 40.993;
 const LON0 = 29.2165;
 const M_PER_DEG_LAT = 111132;
 const M_PER_DEG_LON = 111320 * Math.cos((LAT0 * Math.PI) / 180);
+
+/**
+ * Static scenery never moves: compute its matrices once instead of on every frame.
+ * Call after the object and its children are placed.
+ */
+export function freeze(root) {
+  root.traverse((o) => {
+    o.updateMatrix();
+    o.matrixAutoUpdate = false;
+  });
+}
 
 function geoToWorld(lat, lon) {
   return { x: (lon - LON0) * M_PER_DEG_LON, z: -(lat - LAT0) * M_PER_DEG_LAT };
@@ -93,6 +107,7 @@ function tileLayer(scene, renderer, zoom, radius, y, order, fallback, stats) {
       );
     }
   }
+  freeze(group);
   scene.add(group);
   return group;
 }
@@ -170,47 +185,28 @@ function buildAirfield(scene) {
   const apronMat = new THREE.MeshLambertMaterial({
     color: 0x6f7173, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -30,
   });
-  for (const poly of APRONS) {
+  // Aprons and helipads share materials, so each set is merged into a single mesh.
+  const aprons = mergeGeometries(APRONS.map((poly) => {
     const s = new THREE.Shape(poly.map(([px, pz]) => new THREE.Vector2(px, -pz)));
-    const g = new THREE.ShapeGeometry(s);
-    g.rotateX(-Math.PI / 2);
-    const m = new THREE.Mesh(g, apronMat);
-    m.position.y = 0.25;
-    m.renderOrder = 7;
-    group.add(m);
-  }
+    return new THREE.ShapeGeometry(s).rotateX(-Math.PI / 2);
+  }));
+  const apronMesh = new THREE.Mesh(aprons, apronMat);
+  apronMesh.position.y = 0.25;
+  apronMesh.renderOrder = 7;
+  group.add(apronMesh);
   const padMat = new THREE.MeshLambertMaterial({ color: 0x5c5e60, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -30 });
   const hMat = new THREE.MeshBasicMaterial({ color: 0xf2f2f2, polygonOffset: true, polygonOffsetFactor: -7, polygonOffsetUnits: -35 });
-  for (const [px, pz] of HELIPADS) {
-    const pad = new THREE.Mesh(new THREE.CircleGeometry(9, 24).rotateX(-Math.PI / 2), padMat);
-    pad.position.set(px, 0.27, pz);
-    group.add(pad);
-    const hShape = new THREE.Shape();
-    hShape.moveTo(-3, -4); hShape.lineTo(-1.8, -4); hShape.lineTo(-1.8, -0.6); hShape.lineTo(1.8, -0.6);
-    hShape.lineTo(1.8, -4); hShape.lineTo(3, -4); hShape.lineTo(3, 4); hShape.lineTo(1.8, 4);
-    hShape.lineTo(1.8, 0.6); hShape.lineTo(-1.8, 0.6); hShape.lineTo(-1.8, 4); hShape.lineTo(-3, 4);
-    const h = new THREE.Mesh(new THREE.ShapeGeometry(hShape).rotateX(-Math.PI / 2), hMat);
-    h.position.set(px, 0.34, pz);
-    group.add(h);
-  }
-  // Hangars along the west apron and control tower.
-  const hangarMat = new THREE.MeshStandardMaterial({ color: 0x9aa39a, roughness: 0.8 });
-  const roofMat = new THREE.MeshStandardMaterial({ color: 0x5d6b5a, roughness: 0.7 });
-  const hangars = [[-400, 160, 0.05], [-405, 100, 0.05], [-398, 25, 0.12], [-388, -45, 0.12], [80, -470, 0], [80, 520, 0]];
-  for (const [hx, hz, rot] of hangars) {
-    const body = new THREE.Mesh(new THREE.BoxGeometry(34, 10, 40), hangarMat);
-    body.position.set(hx, 5, hz);
-    body.rotation.y = rot;
-    body.castShadow = body.receiveShadow = true;
-    const roof = new THREE.Mesh(new THREE.CylinderGeometry(17, 17, 40, 20, 1, false, -Math.PI / 2, Math.PI), roofMat);
-    roof.rotation.set(Math.PI / 2, 0, rot);
-    roof.rotation.order = 'ZXY';
-    roof.scale.set(1, 1, 0.35);
-    roof.position.set(hx, 10, hz);
-    group.add(body, roof);
-  }
+  const hShape = new THREE.Shape();
+  hShape.moveTo(-3, -4); hShape.lineTo(-1.8, -4); hShape.lineTo(-1.8, -0.6); hShape.lineTo(1.8, -0.6);
+  hShape.lineTo(1.8, -4); hShape.lineTo(3, -4); hShape.lineTo(3, 4); hShape.lineTo(1.8, 4);
+  hShape.lineTo(1.8, 0.6); hShape.lineTo(-1.8, 0.6); hShape.lineTo(-1.8, 4); hShape.lineTo(-3, 4);
+  const pads = mergeGeometries(HELIPADS.map(([px, pz]) => new THREE.CircleGeometry(9, 24).rotateX(-Math.PI / 2).translate(px, 0.27, pz)));
+  const marks = mergeGeometries(HELIPADS.map(([px, pz]) => new THREE.ShapeGeometry(hShape).rotateX(-Math.PI / 2).translate(px, 0.34, pz)));
+  group.add(new THREE.Mesh(pads, padMat), new THREE.Mesh(marks, hMat));
+  // Control tower.
+  const towerMat = new THREE.MeshStandardMaterial({ color: 0x9aa39a, roughness: 0.8 });
   const tower = new THREE.Group();
-  const tBase = new THREE.Mesh(new THREE.CylinderGeometry(3, 4, 22, 12), hangarMat);
+  const tBase = new THREE.Mesh(new THREE.CylinderGeometry(3, 4, 22, 12), towerMat);
   tBase.position.y = 11;
   const cab = new THREE.Mesh(new THREE.CylinderGeometry(5.5, 4.5, 4, 8), new THREE.MeshStandardMaterial({
     color: 0x5f8fae, metalness: 0.8, roughness: 0.15,
@@ -225,8 +221,68 @@ function buildAirfield(scene) {
   pole.position.set(-235, 9, 290);
   group.add(pole);
   group.add(flag(-235, 15.5, 290));
+  freeze(group);
   scene.add(group);
   return group;
+}
+
+// ---------------------------------------------------------------------------
+// Service hangars
+// ---------------------------------------------------------------------------
+
+/**
+ * Service hangars: centre [x, z] and the heading of the open front (rad about +y; 0 faces
+ * +z). The ground crew only works inside them. Mirrors HANGARS in wasm/src/config.rs.
+ */
+export const HANGARS = [
+  [110, -470, -Math.PI / 2],
+  [110, 520, -Math.PI / 2],
+  [-180, -400, Math.PI / 2],
+  [-190, 0, Math.PI / 2],
+  [-180, 470, Math.PI / 2],
+];
+const HANGAR_URL = 'scenery/hangar.glb';
+/** Model scale: a 64 m wide, 14 m high bay, room for the B-2. */
+const HANGAR_SCALE = 0.8;
+/**
+ * Solid parts in the hangar frame (x across, z towards the front), metres after scaling:
+ * [x0, x1, z0, z1, top]. Low side wings, the side walls and the back wall.
+ */
+const HANGAR_SOLIDS = [
+  [-73, -32, -46, 34, 3.7],
+  [32, 73, -46, 34, 3.7],
+  [-33, -31, -46, 34, 13.5],
+  [31, 33, -46, 34, 13.5],
+  [-33, 33, -46, -44, 13.5],
+];
+
+/** Place the hangars and register their walls with `colliders`; the model streams in. */
+function buildHangars(scene, colliders) {
+  for (const [hx, hz, heading] of HANGARS) {
+    const s = Math.sin(heading);
+    const c = Math.cos(heading);
+    const toWorld = (x, z) => [hx + x * c + z * s, hz - x * s + z * c];
+    for (const [x0, x1, z0, z1, top] of HANGAR_SOLIDS) {
+      colliders.add(footprint([toWorld(x0, z0), toWorld(x1, z0), toWorld(x1, z1), toWorld(x0, z1)], top));
+    }
+  }
+  new GLTFLoader().loadAsync(HANGAR_URL).then((gltf) => {
+    const model = gltf.scene;
+    model.scale.setScalar(HANGAR_SCALE);
+    model.traverse((o) => {
+      if (o.isMesh) o.castShadow = o.receiveShadow = true;
+    });
+    // Floor slab level with the apron.
+    model.position.y = -new THREE.Box3().setFromObject(model).min.y - 0.3;
+    for (const [hx, hz, heading] of HANGARS) {
+      const h = model.clone();
+      h.position.x = hx;
+      h.position.z = hz;
+      h.rotation.y = heading;
+      freeze(h);
+      scene.add(h);
+    }
+  }).catch((err) => console.warn('Hangar model failed to load', err));
 }
 
 function flag(x, y, z) {
@@ -269,20 +325,12 @@ function addRunwayLights(group, r, length) {
 // ---------------------------------------------------------------------------
 
 export function buildWorld(scene, renderer) {
-  const sky = new Sky();
-  sky.scale.setScalar(450000);
-  const u = sky.material.uniforms;
-  u.turbidity.value = 6;
-  u.rayleigh.value = 1.6;
-  u.mieCoefficient.value = 0.005;
-  u.mieDirectionalG.value = 0.8;
-  const sun = new THREE.Vector3().setFromSphericalCoords(1, THREE.MathUtils.degToRad(52), THREE.MathUtils.degToRad(200));
-  u.sunPosition.value.copy(sun);
-  scene.add(sky);
-
-  scene.fog = new THREE.Fog(0xb8c8d8, 6000, 38000);
-  scene.add(new THREE.HemisphereLight(0xcfe3ff, 0x5a5040, 1.1));
-  const dir = new THREE.DirectionalLight(0xfff1dc, 2.2);
+  const { sky, sun } = buildAtmosphere(scene, renderer);
+  freeze(sky);
+  // The sky (environment map) now supplies most of the ambient light; this only lifts
+  // the shadowed sides of matte surfaces, which do not use the environment.
+  scene.add(new THREE.HemisphereLight(0xcfe3ff, 0x5a5040, 0.8));
+  const dir = new THREE.DirectionalLight(0xfff1dc, 2.4);
   dir.position.copy(sun).multiplyScalar(2000);
   dir.castShadow = true;
   dir.shadow.mapSize.set(2048, 2048);
@@ -308,6 +356,9 @@ export function buildWorld(scene, renderer) {
   const blackSea = new THREE.Mesh(new THREE.PlaneGeometry(160000, 60000).rotateX(-Math.PI / 2), water);
   blackSea.position.set(0, -2, -62000);
   scene.add(marmara, blackSea);
+  freeze(far);
+  freeze(marmara);
+  freeze(blackSea);
 
   const tiles = { total: 0, loaded: 0, failed: 0 };
   tileLayer(scene, renderer, 13, 4, -1.0, 1, 0x7d7b62, tiles);
@@ -316,15 +367,44 @@ export function buildWorld(scene, renderer) {
   buildAirfield(scene);
   // Real OSM buildings near the airfield, generated city beyond them.
   const osm = new FootprintGrid();
+  buildHangars(scene, osm);
   const city = createCity(scene, loadBuildings(scene, osm));
+
+  // Light-space axes of the shadow camera (it looks from the sun along -sun with +y up),
+  // for snapping the frustum to whole shadow-map texels.
+  const lightX = new THREE.Vector3(0, 1, 0).cross(sun).normalize();
+  const lightY = new THREE.Vector3().crossVectors(sun, lightX);
+  const center = new THREE.Vector3();
 
   return {
     tiles,
-    /** Keep the shadow frustum centred on the player and stream city chunks around them. */
+    /**
+     * Keep the shadow frustum centred on the player and stream city chunks around them.
+     * The centre moves in whole shadow-map texels across the light, so static shadows
+     * stay put instead of shimmering as the player moves. Returns whether it moved.
+     */
     follow(pos) {
-      dir.position.set(pos.x + sun.x * 2000, pos.y + sun.y * 2000, pos.z + sun.z * 2000);
-      dir.target.position.copy(pos);
+      const texel = (sc.right - sc.left) / dir.shadow.mapSize.x;
+      const u = Math.round(pos.dot(lightX) / texel) * texel;
+      const v = Math.round(pos.dot(lightY) / texel) * texel;
+      const w = pos.dot(sun);
+      center.copy(lightX).multiplyScalar(u).addScaledVector(lightY, v).addScaledVector(sun, w);
+      const moved = !center.equals(dir.target.position);
+      dir.target.position.copy(center);
+      dir.position.copy(center).addScaledVector(sun, 2000);
       city.update(pos);
+      return moved;
+    },
+    /**
+     * Shadow quality hook (quality.js): shadow-map size in texels, 0 for no shadows.
+     * Turning shadows off or on recompiles the lit materials once.
+     */
+    setShadowQuality(size) {
+      dir.castShadow = size > 0;
+      if (!size || dir.shadow.mapSize.x === size) return;
+      dir.shadow.mapSize.set(size, size);
+      dir.shadow.map?.dispose();
+      dir.shadow.map = null;
     },
     /** Sphere (x, y, z, r) against every building: null or { nx, nz, depth }. */
     collide(x, y, z, r) {
