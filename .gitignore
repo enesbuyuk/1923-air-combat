@@ -44,3 +44,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Output of tools/optimize_models.sh
+dist/

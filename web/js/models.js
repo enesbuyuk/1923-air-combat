@@ -199,17 +199,108 @@ const BUILDERS = { f16: buildF16, f22: buildF22, b2: buildB2, kaan: buildKaan };
 // GLB overrides
 // ---------------------------------------------------------------------------
 
-async function tryLoadGLB(key, def, cfg) {
-  const url = `models/${key}.glb`;
+// Compressed GLBs (gltf-transform: KTX2 / Basis textures, Draco or Meshopt geometry, see
+// tools/optimize_models.sh) need decoders. Each is imported only when a file declares the
+// extension, so plain GLBs cost nothing extra. Decoder binaries come from the same three.js
+// build as the import map.
+const ADDONS = (() => {
   try {
-    const head = await fetch(url, { method: 'HEAD' });
-    if (!head.ok) return null;
+    return import.meta.resolve('three/addons/');
+  } catch {
+    return `https://cdn.jsdelivr.net/npm/three@0.${THREE.REVISION}.0/examples/jsm/`;
+  }
+})();
+
+const gltfLoader = new GLTFLoader();
+const decoders = {};
+let decoderRenderer = null;
+
+/**
+ * Renderer the KTX2 transcoder checks for supported GPU formats (ASTC / BC7 / ETC2 / S3TC).
+ * Optional: without it a throwaway WebGL context on the same GPU is probed instead.
+ */
+export function setModelRenderer(renderer) {
+  decoderRenderer = renderer;
+}
+
+/** Minimal stand-in for KTX2Loader.detectSupport when no renderer was registered. */
+function probeRenderer() {
+  const canvas = document.createElement('canvas');
+  const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
+  const has = (name) => !!gl?.getExtension(name);
+  const caps = { isWebGL2: typeof WebGL2RenderingContext !== 'undefined' && gl instanceof WebGL2RenderingContext };
+  const probe = { capabilities: caps, extensions: { has } };
+  // Read every format flag now, then free the context (browsers cap live contexts).
+  const flags = {};
+  for (const n of ['WEBGL_compressed_texture_astc', 'WEBGL_compressed_texture_etc1', 'WEBGL_compressed_texture_etc',
+    'WEBGL_compressed_texture_s3tc', 'EXT_texture_compression_bptc', 'WEBGL_compressed_texture_pvrtc',
+    'WEBKIT_WEBGL_compressed_texture_pvrtc']) flags[n] = has(n);
+  gl?.getExtension('WEBGL_lose_context')?.loseContext();
+  probe.extensions.has = (name) => !!flags[name];
+  return probe;
+}
+
+const DECODERS = {
+  KHR_draco_mesh_compression: () => (decoders.draco ??= import('three/addons/loaders/DRACOLoader.js')
+    .then(({ DRACOLoader }) => gltfLoader.setDRACOLoader(new DRACOLoader().setDecoderPath(`${ADDONS}libs/draco/gltf/`)))),
+  EXT_meshopt_compression: () => (decoders.meshopt ??= import('three/addons/libs/meshopt_decoder.module.js')
+    .then(({ MeshoptDecoder }) => gltfLoader.setMeshoptDecoder(MeshoptDecoder))),
+  KHR_texture_basisu: () => (decoders.ktx2 ??= import('three/addons/loaders/KTX2Loader.js')
+    .then(({ KTX2Loader }) => gltfLoader.setKTX2Loader(new KTX2Loader()
+      .setTranscoderPath(`${ADDONS}libs/basis/`)
+      .detectSupport(decoderRenderer ?? probeRenderer())))),
+};
+
+/** `extensionsUsed` from a GLB header (or a .gltf JSON), without parsing the rest. */
+function gltfExtensions(buffer) {
+  try {
+    const view = new DataView(buffer);
+    const isGlb = buffer.byteLength >= 20 && view.getUint32(0, true) === 0x46546c67; // "glTF"
+    const json = isGlb ? new Uint8Array(buffer, 20, view.getUint32(12, true)) : new Uint8Array(buffer);
+    return JSON.parse(new TextDecoder().decode(json)).extensionsUsed || [];
+  } catch {
+    return [];
+  }
+}
+
+/** Downloads `url`; reports byte progress when `onProgress` is given. Null when missing. */
+async function fetchModel(url, onProgress) {
+  let res;
+  try {
+    res = await fetch(url);
   } catch {
     return null;
   }
-  const gltf = await new GLTFLoader().loadAsync(url);
-  const root = gltf.scene;
+  if (!res.ok) return null;
+  const total = Number(res.headers.get('content-length')) || 0;
+  if (!onProgress || !res.body) return res.arrayBuffer();
+  const reader = res.body.getReader();
+  const chunks = [];
+  let loaded = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    loaded += value.byteLength;
+    onProgress(loaded, total);
+  }
+  const out = new Uint8Array(loaded);
+  let at = 0;
+  for (const c of chunks) { out.set(c, at); at += c.byteLength; }
+  return out.buffer;
+}
+
+async function tryLoadGLB(key, def, cfg, onProgress) {
   const c = cfg[key] || {};
+  // A "version" in models.json (per model or top level) makes the URL unique per upload,
+  // so the worker can let browsers cache it as immutable.
+  const version = c.version ?? cfg.version;
+  const url = `models/${key}.glb${version ? `?v=${encodeURIComponent(version)}` : ''}`;
+  const buffer = await fetchModel(url, onProgress);
+  if (!buffer) return null;
+  await Promise.all(gltfExtensions(buffer).map((ext) => DECODERS[ext]?.()));
+  const gltf = await gltfLoader.parseAsync(buffer, 'models/');
+  const root = gltf.scene;
   // Optional per-model fix-ups from models/models.json: rotation in degrees, extra scale.
   if (c.rotation) root.rotation.set(...c.rotation.map((d) => THREE.MathUtils.degToRad(d)));
   const wrap = new THREE.Group();
@@ -287,6 +378,8 @@ export class AircraftModels {
     this.pending = {};
     /** @type {((key: string) => void) | null} called when a template or its load status changes */
     this.onChange = null;
+    /** @type {((key: string, loaded: number, total: number) => void) | null} GLB download bytes */
+    this.onProgress = null;
     for (const def of AIRCRAFT) {
       const template = BUILDERS[def.key]();
       template.userData.source = 'procedural';
@@ -305,13 +398,30 @@ export class AircraftModels {
     return (this.pending[key] ??= this._load(key));
   }
 
+  /**
+   * Downloads the GLBs nobody asked for yet, one at a time while the browser is idle, so
+   * bots met later in the air already have their model. Skipped on Save-Data or 2G links.
+   */
+  prefetchIdle(keys = Object.keys(this.entries)) {
+    const net = navigator.connection;
+    if (net?.saveData || /2g/.test(net?.effectiveType || '')) return;
+    const queue = keys.filter((k) => this.entries[k] && !this.pending[k]);
+    const idle = window.requestIdleCallback ?? ((cb) => setTimeout(cb, 200));
+    const next = () => {
+      const key = queue.shift();
+      if (key) idle(() => this.load(key).then(next), { timeout: 5000 });
+    };
+    next();
+  }
+
   async _load(key) {
     const entry = this.entries[key];
     const { def } = entry;
     entry.status = 'loading';
     this.onChange?.(key);
     try {
-      const template = await tryLoadGLB(key, def, this.cfg);
+      const progress = this.onProgress && ((loaded, total) => this.onProgress?.(key, loaded, total));
+      const template = await tryLoadGLB(key, def, this.cfg, progress);
       if (template) {
         // GLB-specific exhaust / eye positions (metres, aircraft frame) from models.json.
         const c = this.cfg[key] || {};
