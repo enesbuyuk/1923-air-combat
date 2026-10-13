@@ -56,14 +56,18 @@ Yerelde çalışan oyundan alındı. Tam boyutunu görmek için görsele tıkla.
 ## Özellikler
 
 - **Rust → WebAssembly oyun çekirdeği:** uçuş fiziği, kalkış/iniş, stall, bot yapay zekâsı, top mermisi, güdümlü füze ve kilitlenme, flare, çarpışma, dalga sistemi ve görevler. Dış bağımlılık yok, ~80 KB.
-- **Uçuş fiziği:** hücum açısı ve yan kayması olan gerçek bir hız vektörü; taşıma ve sürükleme ISA hava yoğunluğu ve hızın karesiyle ölçeklenir, dönüşler hız (corner speed) ve uçağa özgü G limitiyle sınırlanır, sert çekişler indüklenmiş sürüklemeyle enerji kaybettirir. Mach 1 civarında transonik sürükleme artışı, irtifayla azalan itki, motor gecikmesi, pitch ve roll ataleti, yer etkisi, hamleli rüzgar ve alçak irtifa türbülansı.
+- **Uçuş fiziği:** hücum açısı ve yan kayması olan gerçek bir hız vektörü; taşıma ve sürükleme ISA hava yoğunluğu ve hızın karesiyle ölçeklenir, dönüşler hız (corner speed) ve uçağa özgü G limitiyle sınırlanır, sert çekişler indüklenmiş sürüklemeyle enerji kaybettirir. Mach 1 civarında transonik sürükleme artışı, irtifayla azalan itki, motor gecikmesi, yer etkisi, hamleli rüzgar ve alçak irtifa türbülansı.
+- **Altı serbestlik dereceli katı cisim:** aerodinamik momentler (statik kararlılık, yunuslama / yatış / sapma sönümü, dihedral, kumanda yüzeyleri, stall kırılması, kanat düşmesi ve otorotasyon) ve eylemsizlik momentlerinin jiroskopik eşleşmesi (Euler denklemleri) gövdeyi döndürür. Hücum açısı / G sınırlayıcılı, otomatik trimli, koordineli dönüş yapan ve uçuş yolu etrafında yatan fly-by-wire uçuş kontrol bilgisayarı, hız sınırlı kumanda yüzeylerini stall olmamış gövde modelinin dinamik ters çevrimiyle sürer; yavaş ya da stall olmuş uçak kumanda otoritesini kendiliğinden kaybeder. Her şey 120 Hz dördüncü derece Runge-Kutta ile ilerler.
 - **Yakıt ve ağırlık:** afterburner'da yakıt tüketimi hızla artar; dolu depo uçağı ağırlaştırır (daha yüksek stall hızı, daha yavaş tırmanış), boş depo motoru durdurur.
+- **Enerji ve limitler:** kontroller yüksek hızda sertleşir; uçak en iyi azami hızda değil, corner speed civarında döner ve yatar. Sert çekerken yatış daha yavaştır. Rudder'lı stall'da stick geride tutulursa uçak spine girer (çıkmak için stick ileri ve ters rudder); yapısal hız sınırını aşan dalış gövdeye hasar verir (OVERSPEED).
+- **Gerçek performans zarfı:** itki/ağırlık oranı gerçek uçaklara yakın (F-16 ~1.1, B-2 ~0.4); itki irtifayla düşer ve tropopozun üstünde daha hızlı düşer (her uçağın bir servis tavanı vardır); afterburner itkisi Mach ile artar, afterburner yakılınca yakıt tüketimi sıçrar. Top mermileri sürüklenmeyle yavaşlar ve saçılır; füzeler beş saniye yanar, en yakın geçişte patlar ve ıska mesafesi arttıkça daha az hasar verir; modern arayıcılar flare'lerin çoğunu ayırt eder; havada çarpışan iki uçak da kaybolur.
+- **Realism ayarı (Arcade / Simulator):** Simulator top nişan yardımını ve büyütülmüş isabet kutularını kaldırır, gerçek mühimmat yükler (F-16: 511 mermi, yaklaşık beş saniyelik atış; B-2 havadan havaya silah taşımaz), iniş limitlerini sıkılaştırır (6 m/s üstü alçalma veya 20 dereceden fazla yatışta iniş takımı kırılır, fazla hızlı temasta lastik patlar), alan sınırındaki görünmez dönüşü kaldırır (geri dönmek için 30 s, yoksa uçak kaybedilir), yer ekibi 90 s sürer ve düşman füzesi isabeti öldürücüdür.
 - **Sistem hasarı:** isabetler gövde hasarının yanında motoru (daha az itki), uçuş kontrollerini (ağır pitch ve roll) ya da yakıt deposunu (sızıntı) vurabilir.
-- **Yer ekibi:** havalimanında dur, gazı rölantiye al; ekip birkaç saniyede mühimmatı, yakıtı ve hasarı yeniler.
+- **Yer ekibi:** havalimanındaki beş hangardan birine taksi yap, dur ve gazı rölantiye al; ekip birkaç saniyede mühimmatı, yakıtı ve hasarı yeniler. Hangar dışında ikmal yok.
 - **Düşmanlar aynı uçuş modelini uçar:** bot yapay zekâsı sadece stick ve gazı oynatır; düşmanlar dönüşte enerji kaybeder, stall olabilir ve yere dikkat etmek zorundadır. Taktikler: devriye, lead / pure / lag takip, kuyruktaki saldırgana karşı maksimum G kırış, flare ile füzeden kaçış, alçak veya yavaşken toparlanma.
 - **Gerçek enerjili füzeler:** orantılı seyrüsefer (PN) güdümü, birkaç saniye yanıp sonra süzülen roket motoru, hava yoğunluğuyla artan sürükleme, yavaşlayınca etkisini kaybeden kanatçıklar ve seeker gimbal limiti. Geç ve yavaşlamış bir füze dönüşle atlatılabilir; uzaktaki kaçan bir hedefe yetişemez.
 - **Karşı tedbir ve radar ikaz:** düşman avcıları ikinci dalgadan itibaren kilitlenip füze atar; RWR sesi, HUD ve radar kilitleri ve gelen füzeleri yönüyle gösterir. Flare füzeyi aldatabilir; sıcak egzoza kuyruktan bakan seeker en zor kandırılanıdır, gazı kes ve dön.
-- **Görevler:** sonsuz *Waves*, *Strike* (her hedef bölgesindeki SAM sahalarını yok et; radar ufkunun üstündeki her şeye ateş ederler, alçak uç) ve *Escort* (dost bir B-2'yi rotası boyunca koru).
+- **Görevler:** sonsuz *Waves*, *Strike* (her hedef bölgesindeki SAM sahalarını yok et; radar ufkunun üstündeki her şeye ateş ederler, alçak uç), *Escort* (dost bir B-2'yi rotası boyunca koru) ve *Free* (düşman yok, sadece uç).
 - **Kill cam:** düşürüldükten sonra son saniyeler ağır çekimde tekrar oynatılır.
 - **Sabit adımlı simülasyon:** çekirdek kare hızından bağımsız olarak her adımda 1/60 sn ilerler, görüntü adımlar arasında interpolasyon yapar.
 - **Gamepad ve dokunmatik:** standart eşlemeli gamepad'ler doğrudan çalışır; dokunmatik ekranlarda ekran üstü stick, gaz ve butonlar çıkar.
@@ -122,6 +126,7 @@ cd 1923-air-combat
 | `V` | Kamera (kokpit / takip) |
 | `H` | Kontrol listesini göster / gizle |
 | Fare tekerleği | Takip kamerası yakınlaştırma |
+| Orta tuşla sürükleme | Etrafa bakma (kokpit) / uçağın çevresinde dönme (takip) |
 | `I` | Pitch eksenini ters çevir |
 | `M` | Sesi aç / kapat |
 | `Esc` | Duraklat |
@@ -141,6 +146,7 @@ Modu menüden veya duraklatma ekranından seç.
 | **Waves** | Sonsuz düşman dalgaları. Düşman avcıları ilk dalgada füze taşımaz, sonra en fazla iki (kolayda bir) taşır. |
 | **Strike** | Hedef bölgedeki tüm SAM sahalarını top veya füzeyle yok et (uçaklar gibi kilitlenirler). Her saha 7 km içinde ~120 m üstündeki uçağa kilitlenip ateş eder; daha alçak uçmak seni radarından saklar. Temizlenen bölge bonus kazandırır, ardından daha büyük bir bölge gelir. Küçük düşman dalgaları koruma yapar. |
 | **Escort** | Dost bir B-2 (HUD ve radarda mavi) üs çevresinde bir tur uçar. Düşman avcıları onu hedefler; sekiz ayağı tamamlatırsan bonus kazanırsın. |
+| **Free** | Düşman, SAM sahası veya hedef yok. Şehrin üstünde serbestçe uç. |
 
 <a id="hayatta-kalma"></a>
 
@@ -148,7 +154,7 @@ Modu menüden veya duraklatma ekranından seç.
 
 - Radar halkası ve yükselen cıvıltı bir düşman radarının sana kilitlendiğini gösterir; hızlı ötüş ve radardaki kırmızı çizgi havada bir füze olduğunu gösterir.
 - Füzeye karşı: flare at (`C`), gazı geri çek ve füzenin yolunu keserek sert dön. Motoru bitince füze enerji kaybeder, geç ve yavaş bir füze dönüşle atlatılabilir.
-- Yakıt göstergesini izle: `BINGO FUEL` eve dönme zamanı demek. İn, `B` ile dur ve pistin yakınında rölantide bekle; yer ekibi yakıtı, mühimmatı, flare'leri, gövdeyi ve sistemleri yeniler.
+- Yakıt göstergesini izle: `BINGO FUEL` eve dönme zamanı demek. İn, bir hangara taksi yap, `B` ile dur ve rölantide bekle; yer ekibi yakıtı, mühimmatı, flare'leri, gövdeyi ve sistemleri yeniler.
 
 <a id="inis-rehberi"></a>
 
@@ -219,11 +225,11 @@ wasm/src/config.rs             uçak performansı, zorluk, fizik ve pist sabitle
 wasm/src/layout.rs             JS ile paylaşılan çıktı tampon düzeni
 wasm/src/math.rs               vektörler, kuaterniyonlar, RNG
 wasm/src/entities.rs           ortak gövde durumu, oyuncu, bot, mermi, füze, flare, SAM sahası verileri
-wasm/src/game/aero.rs          oyuncu ve botların ortak uçuş modeli (taşıma, sürükleme, itki, yakıt, kütle, atalet)
+wasm/src/game/aero.rs          oyuncu ve botların ortak uçuş modeli (taşıma, sürükleme, itki, yakıt, kütle, 6DOF katı cisim, fly-by-wire)
 wasm/src/game/flight.rs        oyuncu: yer koşusu, teker koyma, yer ekibi, silahlar, flare, kilitlenme
 wasm/src/game/bots.rs          düşman dalgaları, bot taktikleri ve otopilot
 wasm/src/game/projectiles.rs   top mermileri, füze güdümü ve enerjisi, flare
-wasm/src/game/missions.rs      oyun modları: waves, strike (SAM sahaları), escort
+wasm/src/game/missions.rs      oyun modları: waves, strike (SAM sahaları), escort, free
 wasm/src/game/                 ayrıca oyun durumu (mod.rs), atmosfer/hava (air.rs), testler (cargo test)
 web/index.html                 menü + katmanlar
 web/js/main.js                 açılış, oyun durumu, oyun döngüsü, olay işleme
@@ -235,6 +241,10 @@ web/js/camera.js               menü, kokpit, takip, enkaz ve kill cam kameralar
 web/js/airflow.js              hava akışı çizgileri ve sarsıntı seviyesi (hamle, türbülans, yüksek hücum açısı)
 web/js/vortex.js               kanat ucu girdap ipleri (sirkülasyon, alçalma, sarılma, yer etkisi, çekirdek büyümesi)
 web/js/vapor.js                sert çekişte kanat üstü buharı, ses hızı civarında buhar konisi
+web/js/atmosphere.js           gökyüzü, gökyüzünden ortam aydınlatması, irtifaya bağlı pus
+web/js/clouds.js               kamera çevresinde cumulus bulutları, bulut içinde beyazlama
+web/js/post.js                 son işleme: ısı dalgalanması, bulut beyazlaması, bloom, ton eşleme
+web/js/flyby.js                yakındaki uçakların sesi (Doppler, yön) ve sonic boom
 web/js/wing.js                 her modelin mesh'inden ölçülen kanat ucu ve kök veter
 web/js/input.js                klavye / fare / gamepad kontrolleri
 web/js/touch.js                ekran üstü dokunmatik kontroller
@@ -242,7 +252,7 @@ web/js/replay.js               kill cam kaydı ve ağır çekim tekrar
 web/js/ground.js               SAM sahası modelleri (strike modu)
 web/js/gforce.js               G kararması / G-LOC efekti
 web/js/menu.js                 uçak seçim menüsü
-web/js/settings.js             oyun modu / zorluk / düşman yoğunluğu ayarları
+web/js/settings.js             gerçekçilik / oyun modu / zorluk / düşman yoğunluğu ayarları
 web/js/collision.js            bina çarpışma testleri
 web/js/models.js               prosedürel uçak + GLB yükleyici
 web/js/world.js                uydu zemini, pistler, gökyüzü
@@ -272,6 +282,7 @@ Durum doğrusal bellekten `Float32Array` olarak okunur: `player_ptr`, `bots_ptr`
 | F-22 modeli | ["F-22 Raptor - Fighter Jet - Free"](https://sketchfab.com/bohmerang), bohmerang | CC-BY-NC-SA-4.0 (ticari kullanım yok) |
 | KAAN modeli | "KAAN - Milli Muharip Uçak - KAAN 3D MODEL", [Özcan Özaltın](https://sketchfab.com/ozcan_36) | CC-BY-4.0 |
 | B-2 modeli | "B-2 spirit", [hilos run](https://sketchfab.com/josue.santiagorm22) | CC-BY-4.0 |
+| Hangar modeli | ["Rebel Hangar Version 1"](https://sketchfab.com/3d-models/rebel-hangar-version-1-2dfef17c8737459e95af621034acb00b), [MichaelEGA](https://sketchfab.com/MichaelEGA) | CC-BY-4.0 |
 | Şehir modelleri | [Kenney](https://kenney.nl) City Kit | CC0 |
 | Uydu görüntüsü | © Esri, Maxar, Earthstar Geographics | - |
 | Pist verisi | © OpenStreetMap katkıcıları | ODbL |

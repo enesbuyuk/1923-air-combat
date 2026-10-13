@@ -56,14 +56,18 @@ Captured from the game running locally. Click an image to view it at full size.
 ## Features
 
 - **Rust → WebAssembly game core:** flight physics, takeoff/landing, stall, bot AI, cannon rounds, guided missiles with lock-on, flares, collisions, wave system and missions. No external dependencies, ~80 KB.
-- **Flight physics:** a real velocity vector with angle of attack and sideslip; lift and drag scale with ISA air density and airspeed², so turns are limited by speed (corner speed) and a per-aircraft G limit, and hard pulls bleed energy through induced drag. Transonic drag rise near Mach 1, thrust that thins with altitude, engine spool lag, pitch and roll inertia, ground effect, and wind with gusts and low-level turbulence (crosswind crabbing on approach, weathervaning on the runway).
+- **Flight physics:** a real velocity vector with angle of attack and sideslip; lift and drag scale with ISA air density and airspeed², so turns are limited by speed (corner speed) and a per-aircraft G limit, and hard pulls bleed energy through induced drag. Transonic drag rise near Mach 1, thrust that thins with altitude, engine spool lag, ground effect, and wind with gusts and low-level turbulence (crosswind crabbing on approach, weathervaning on the runway).
+- **Six-degree-of-freedom rigid body:** aerodynamic moments (static stability, pitch / roll / yaw damping, dihedral, control surfaces, stall break, wing drop and autorotation) and gyroscopic inertia coupling (Euler's equations) turn the airframe. A fly-by-wire flight control computer with AoA / G limiter, auto-trim, turn coordination and rolls about the flight path drives rate-limited control surfaces by dynamic inversion of the unstalled airframe, so a slow or stalled aircraft runs out of authority on its own. Everything advances with a fourth-order Runge-Kutta integrator at 120 Hz.
 - **Fuel and weight:** fuel flow rises steeply in afterburner; a full tank is heavier (higher stall speed, slower climb) and a dry tank flames the engine out.
+- **Energy and limits:** controls stiffen at high speed, so an aircraft turns and rolls best near corner speed, not at top speed; rolling while pulling hard is slower. Holding the stick back in a ruddered stall autorotates into a spin (stick forward and opposite rudder to recover), and diving past the structural speed limit damages the airframe (OVERSPEED).
+- **Real performance envelope:** thrust-to-weight close to the real aircraft (F-16 ~1.1, B-2 ~0.4), thrust lapse with altitude that steepens above the tropopause (so each aircraft has a service ceiling), afterburner thrust that grows with Mach, and fuel flow that jumps when the afterburner is lit. Cannon rounds slow down with drag and spread; missiles burn for five seconds, fuse at the closest pass and do less damage the further they miss; modern seekers reject most flares; aircraft that touch in the air are both lost.
+- **Realism setting (Arcade / Simulator):** Simulator removes the cannon aim assist and the enlarged hitboxes, loads real ammunition (F-16: 511 rounds, about five seconds of fire; the B-2 carries no air-to-air weapons), tightens the landing limits (gear breaks above 6 m/s sink or 20 deg of bank, tyres burst on a too-fast touchdown), drops the invisible turn at the edge of the area (30 s to return or the aircraft is lost), takes the ground crew 90 s, and makes an enemy missile hit lethal.
 - **System damage:** hits can knock out the engine (less thrust), the flight controls (sluggish pitch and roll) or hole the fuel tank (leak), on top of hull damage.
-- **Ground crew:** stop on the airfield with the throttle at idle and the crew rearms, refuels and repairs the aircraft in a few seconds.
+- **Ground crew:** taxi into one of the five hangars on the airfield and stop with the throttle at idle; the crew rearms, refuels and repairs the aircraft in a few seconds. Nowhere else.
 - **Enemies fly the same flight model:** bot AI only moves the stick and throttle, so enemies bleed energy in turns, can stall and must avoid the ground. Tactics: patrol, lead / pure / lag pursuit, a max-G break turn against an attacker on the tail, missile evasion with flares, and recovery when low or slow.
 - **Missiles with real energy:** proportional navigation guidance, a rocket motor that burns for a few seconds and then coasts, drag that grows with air density, fins that lose authority when slow, and a seeker gimbal limit. A late, slow missile can be out-turned; a distant fleeing target cannot be run down.
 - **Countermeasures and radar warning:** enemy fighters lock on and fire missiles from the second wave; the RWR tone, HUD and radar show locks and incoming missiles with their bearing. Flares can seduce a missile; a tail-on seeker staring at a hot engine is the hardest to fool, so cut the throttle and turn.
-- **Missions:** endless *Waves*, *Strike* (destroy the SAM sites of each target area; they fire at anything above their radar horizon, so fly low) and *Escort* (protect a friendly B-2 around its route).
+- **Missions:** endless *Waves*, *Strike* (destroy the SAM sites of each target area; they fire at anything above their radar horizon, so fly low) *Escort* (protect a friendly B-2 around its route) and *Free* (no enemies, just fly).
 - **Kill cam:** after being shot down, the last seconds replay in slow motion.
 - **Fixed-step simulation:** the core always advances 1/60 s per step regardless of frame rate, and rendering interpolates between steps.
 - **Gamepad and touch:** standard-mapping gamepads work out of the box; touch screens get an on-screen stick, throttle and buttons.
@@ -101,6 +105,8 @@ cd 1923-air-combat
 
 - Build only: `./build.sh`
 - If 8080 is taken, the script finds the next free port; to pick one manually: `PORT=3000 ./build.sh serve`
+- If [Binaryen](https://github.com/WebAssembly/binaryen)'s `wasm-opt` is installed, the build runs it on the wasm (`-O3`; `WASM_OPT=-Oz ./build.sh` for size, `WASM_OPT=0` to skip)
+- Optional model compression: `tools/optimize_models.sh` writes KTX2 (or webp) textures and Meshopt geometry to `dist/models/` without touching `web/models/`; see the script header for options
 
 > [!NOTE]
 > The WASM is loaded via `fetch`, so opening `index.html` over `file://` won't work; an HTTP server is required.
@@ -122,6 +128,7 @@ cd 1923-air-combat
 | `V` | Camera (cockpit / chase) |
 | `H` | Show / hide controls list |
 | Mouse wheel | Chase camera zoom |
+| Middle mouse drag | Look around (cockpit) / orbit (chase) |
 | `I` | Invert pitch axis |
 | `M` | Toggle sound |
 | `Esc` | Pause |
@@ -139,12 +146,13 @@ Pick the mode in the menu or the pause screen.
 | **Waves** | Endless enemy waves. Enemy fighters carry no missiles in the first wave and up to two later (one on easy). |
 | **Strike** | Destroy every SAM site of the target area with cannon or missiles (they lock like aircraft). Each site locks on and fires at an aircraft above ~120 m within 7 km; flying lower keeps you off its radar. A cleared area pays a bonus and the next, larger one appears. Smaller enemy waves fly cover. |
 | **Escort** | A friendly B-2 (blue on the HUD and radar) flies a circuit around the base. Enemy fighters go for it; bring it around eight legs for the bonus. |
+| **Free** | No enemies, no SAM sites, no objectives. Just fly around the city. |
 
 ## Survival Tips
 
 - The radar ring and a rising chirp mean an enemy radar is locking you; a fast warble and a red spoke on the radar mean a missile is in the air.
 - Against a missile: drop flares (`C`), pull the throttle back and turn hard across its path. Missiles lose energy after the motor burns out, so a late, slow missile can be out-turned.
-- Watch the fuel gauge: `BINGO FUEL` means head home. Land, stop with `B` and idle near the runway; the ground crew restores fuel, weapons, flares, hull and systems.
+- Watch the fuel gauge: `BINGO FUEL` means head home. Land, taxi into a hangar, stop with `B` and idle; the ground crew restores fuel, weapons, flares, hull and systems.
 
 ## Landing Guide
 
@@ -213,11 +221,11 @@ wasm/src/config.rs             aircraft performance, difficulty, physics and run
 wasm/src/layout.rs             output buffer layout shared with JS
 wasm/src/math.rs               vectors, quaternions, RNG
 wasm/src/entities.rs           shared airframe state, player, bot, bullet, missile, flare, SAM site data
-wasm/src/game/aero.rs          flight model shared by the player and the bots (lift, drag, thrust, fuel, mass, inertia)
+wasm/src/game/aero.rs          flight model shared by the player and the bots (lift, drag, thrust, fuel, mass, 6DOF rigid body, fly-by-wire)
 wasm/src/game/flight.rs        player: ground roll, touchdown, ground crew, weapons, flares, lock-on
 wasm/src/game/bots.rs          enemy waves, bot tactics and autopilot
 wasm/src/game/projectiles.rs   cannon rounds, missile guidance and energy, flares
-wasm/src/game/missions.rs      game modes: waves, strike (SAM sites), escort
+wasm/src/game/missions.rs      game modes: waves, strike (SAM sites), escort, free
 wasm/src/game/                 also game state (mod.rs), atmosphere/weather (air.rs), tests (cargo test)
 web/index.html                 menu + overlays
 web/js/main.js                 boot, game state, game loop, event handling
@@ -229,6 +237,10 @@ web/js/camera.js               menu, cockpit, chase, wreck and kill-cam cameras
 web/js/airflow.js              airflow streaks and buffet level (gusts, turbulence, high alpha)
 web/js/vortex.js               wingtip vortex ropes (circulation, sink, roll-up, ground effect, core growth)
 web/js/vapor.js                wing vapor over the upper wing in hard pulls, transonic vapor cone
+web/js/atmosphere.js           sky, image-based lighting, altitude-dependent haze (aerial perspective)
+web/js/clouds.js               cumulus field around the camera, whiteout inside a cloud
+web/js/post.js                 post-processing: heat shimmer, cloud whiteout, bloom, tone mapping
+web/js/flyby.js                other aircraft heard nearby (Doppler, panning) and sonic booms
 web/js/wing.js                 wingtip and root chord measured from each model's mesh
 web/js/input.js                keyboard / mouse / gamepad controls
 web/js/touch.js                on-screen touch controls
@@ -236,7 +248,7 @@ web/js/replay.js               kill-cam recording and slow-motion replay
 web/js/ground.js               SAM site models (strike mode)
 web/js/gforce.js               G blackout / G-LOC effect
 web/js/menu.js                 aircraft selection menu
-web/js/settings.js             game mode / difficulty / enemy density settings
+web/js/settings.js             realism / game mode / difficulty / enemy density settings
 web/js/collision.js            building collision tests
 web/js/models.js               procedural aircraft + GLB loader
 web/js/world.js                satellite ground, runways, sky
@@ -266,6 +278,7 @@ State is read from linear memory as `Float32Array`: `player_ptr`, `bots_ptr`, `b
 | F-22 model | ["F-22 Raptor - Fighter Jet - Free"](https://sketchfab.com/bohmerang) by bohmerang | CC-BY-NC-SA-4.0 (no commercial use) |
 | KAAN model | "KAAN - Milli Muharip Uçak - KAAN 3D MODEL" by [Özcan Özaltın](https://sketchfab.com/ozcan_36) | CC-BY-4.0 |
 | B-2 model | "B-2 spirit" by [hilos run](https://sketchfab.com/josue.santiagorm22) | CC-BY-4.0 |
+| Hangar model | ["Rebel Hangar Version 1"](https://sketchfab.com/3d-models/rebel-hangar-version-1-2dfef17c8737459e95af621034acb00b) by [MichaelEGA](https://sketchfab.com/MichaelEGA) | CC-BY-4.0 |
 | City models | [Kenney](https://kenney.nl) City Kit | CC0 |
 | Satellite imagery | © Esri, Maxar, Earthstar Geographics | - |
 | Runway data | © OpenStreetMap contributors | ODbL |
