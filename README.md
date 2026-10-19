@@ -8,7 +8,7 @@
 
 **Browser-based flight and combat simulator over the skies of Istanbul**
 
-Take off from the Turkish Air Base (LTBX), shoot down enemy waves, and land back on the runway in one piece.
+Take off from the Turkish Air Base (LTBX), shoot down enemy waves, and land back on the runway in one piece. Or send your friends a room link and dogfight each other online.
 
 [![Live Demo](https://img.shields.io/badge/Live%20Demo-Play%20now-2ea44f?style=for-the-badge)](https://1923-air-combat.enesbuyuk.com)
 
@@ -45,11 +45,20 @@ Take off from the Turkish Air Base (LTBX), shoot down enemy waves, and land back
 
 ## Screenshots
 
-Captured from the game running locally. Click an image to view it at full size.
+Click an image to view it at full size.
 
 | Aircraft selection | KAAN over Istanbul |
 |:---:|:---:|
-| [![Aircraft selection menu with KAAN MMU on runway 36](docs/screenshots/aircraft-selection.jpg)](docs/screenshots/aircraft-selection.jpg) | [![KAAN banking over Istanbul with the chase camera and flight HUD](docs/screenshots/kaan-flight.jpg)](docs/screenshots/kaan-flight.jpg) |
+| [![Aircraft selection menu with KAAN MMU on runway 36 and the Fly online card above Take off](docs/screenshots/aircraft-selection.jpg)](docs/screenshots/aircraft-selection.jpg) | [![KAAN banking over Istanbul with the chase camera and flight HUD](docs/screenshots/kaan-flight.jpg)](docs/screenshots/kaan-flight.jpg) |
+
+| Online room with its invite link | Invitation from a friend |
+|:---:|:---:|
+| [![Online room screen with the room code, night setting, invite link and pilot list](docs/screenshots/online-room.jpg)](docs/screenshots/online-room.jpg) | [![Invitation screen: Enes invited you to a night room, with Accept and Decline](docs/screenshots/online-invite.jpg)](docs/screenshots/online-invite.jpg) |
+
+<p align="center">
+  <a href="docs/screenshots/online-night.jpg"><img src="docs/screenshots/online-night.jpg" alt="Night runway in an online room: another pilot's F-22, tagged with their callsign on the HUD, fires at the player; the Tab scoreboard is open" width="80%" /></a>
+  <br /><b>Night room: another pilot opens fire</b>
+</p>
 
 | F-22 climb in Escort mode | Cockpit view and flight HUD |
 |:---:|:---:|
@@ -73,6 +82,7 @@ Captured from the game running locally. Click an image to view it at full size.
 - **Missiles with real energy:** proportional navigation guidance, a rocket motor that burns for a few seconds and then coasts, drag that grows with air density, fins that lose authority when slow, and a seeker gimbal limit. A late, slow missile can be out-turned; a distant fleeing target cannot be run down.
 - **Countermeasures and warning:** fighters carry their aircraft’s missile load from the first wave. Air-to-air infrared seekers are passive and do not trigger the RWR; radar-guided SAM locks do. The missile warning system needs line of sight and detects threats within 8 km. Flares can seduce IR missiles, while radar-guided SAMs must be evaded or masked by terrain/buildings.
 - **Missions:** endless *Waves*, *Strike* (destroy the SAM sites of each target area; they fire at anything above their radar horizon, so fly low) *Escort* (protect a friendly B-2 around its route) and *Free* (no enemies, just fly).
+- **Online rooms:** create a room (day or night, guns only or guns + missiles), share the invite link, and up to 8 friends fly free-for-all against each other with a live scoreboard. See [Online Play](#online-play).
 - **Kill cam:** after being shot down, the last seconds replay in slow motion.
 - **Day and night:** the *Time of day* setting (menu or pause screen) switches to a moonlit night with stars, a dark haze, lit windows across the city and glowing runway edge lights; every aircraft shows red/green position lights, white tail light, double-flashing strobes and a red beacon, and with the gear down a landing light that lights the runway ahead of the player. Afterburners and explosions stand out. It can be changed mid-flight.
 - **Fixed-step simulation:** the core always advances 1/60 s per step regardless of frame rate, and rendering interpolates between steps.

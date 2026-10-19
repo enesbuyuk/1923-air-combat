@@ -8,7 +8,7 @@
 
 **İstanbul semalarında tarayıcıda oynanan uçuş ve it dalaşı oyunu**
 
-Türk Hava Üssü'nden (LTBX) kalk, düşman dalgalarını düşür ve piste sağ salim geri in.
+Türk Hava Üssü'nden (LTBX) kalk, düşman dalgalarını düşür ve piste sağ salim geri in. Ya da arkadaşlarına bir oda linki gönder ve online olarak birbirinizle it dalaşına girin.
 
 [![Canlı Demo](https://img.shields.io/badge/Canl%C4%B1%20Demo-Hemen%20oyna-2ea44f?style=for-the-badge)](https://1923-air-combat.enesbuyuk.com)
 
@@ -44,11 +44,20 @@ Türk Hava Üssü'nden (LTBX) kalk, düşman dalgalarını düşür ve piste sa�
 
 ## Ekran Görüntüleri
 
-Yerelde çalışan oyundan alındı. Tam boyutunu görmek için görsele tıkla.
+Tam boyutunu görmek için görsele tıkla.
 
 | Uçak seçimi | İstanbul üzerinde KAAN |
 |:---:|:---:|
-| [![Pist 36 üzerindeki KAAN MMU ile uçak seçim menüsü](docs/screenshots/aircraft-selection.jpg)](docs/screenshots/aircraft-selection.jpg) | [![Takip kamerası ve uçuş göstergeleriyle İstanbul üzerinde dönüş yapan KAAN](docs/screenshots/kaan-flight.jpg)](docs/screenshots/kaan-flight.jpg) |
+| [![Pist 36 üzerindeki KAAN MMU ve Take off'un üstündeki Fly online kartıyla uçak seçim menüsü](docs/screenshots/aircraft-selection.jpg)](docs/screenshots/aircraft-selection.jpg) | [![Takip kamerası ve uçuş göstergeleriyle İstanbul üzerinde dönüş yapan KAAN](docs/screenshots/kaan-flight.jpg)](docs/screenshots/kaan-flight.jpg) |
+
+| Davet linkiyle online oda | Arkadaştan gelen davet |
+|:---:|:---:|
+| [![Oda kodu, gece ayarı, davet linki ve pilot listesiyle online oda ekranı](docs/screenshots/online-room.jpg)](docs/screenshots/online-room.jpg) | [![Davet ekranı: Enes seni gece odasına davet etti, Accept ve Decline butonlarıyla](docs/screenshots/online-invite.jpg)](docs/screenshots/online-invite.jpg) |
+
+<p align="center">
+  <a href="docs/screenshots/online-night.jpg"><img src="docs/screenshots/online-night.jpg" alt="Online odada gece pisti: HUD'da çağrı adıyla işaretlenen diğer pilotun F-22'si oyuncuya ateş ediyor, Tab skor tablosu açık" width="80%" /></a>
+  <br /><b>Gece odası: diğer pilot ateş açıyor</b>
+</p>
 
 | Escort modunda F-22 tırmanışı | Kokpit ve uçuş göstergeleri |
 |:---:|:---:|
@@ -74,6 +83,7 @@ Gerçekçilik incelemesi ve öncelikli geliştirmeler: [Simülatör değerlendir
 - **Gerçek enerjili füzeler:** orantılı seyrüsefer (PN) güdümü, birkaç saniye yanıp sonra süzülen roket motoru, hava yoğunluğuyla artan sürükleme, yavaşlayınca etkisini kaybeden kanatçıklar ve seeker gimbal limiti. Geç ve yavaşlamış bir füze dönüşle atlatılabilir; uzaktaki kaçan bir hedefe yetişemez.
 - **Karşı tedbir ve ikaz:** avcılar ilk dalgadan itibaren kendi füze yüklerini taşır. Havadan havaya IR arayıcılar pasiftir, RWR’yi tetiklemez; radar güdümlü SAM kilitleri tetikler. Füze ikaz sistemi 8 km içinde açık görüş hattı ister. Flare IR füzelerini aldatabilir; radar güdümlü SAM’lerden manevra veya arazi/bina maskelemesiyle kaçılır.
 - **Görevler:** sonsuz *Waves*, *Strike* (her hedef bölgesindeki SAM sahalarını yok et; radar ufkunun üstündeki her şeye ateş ederler, alçak uç), *Escort* (dost bir B-2'yi rotası boyunca koru) ve *Free* (düşman yok, sadece uç).
+- **Online odalar:** bir oda kur (gündüz veya gece, yalnız top veya top + füze), davet linkini paylaş; en fazla 8 arkadaş canlı skor tablosuyla herkes herkese karşı uçar. Bkz. [Online Oyun](#online-oyun).
 - **Kill cam:** düşürüldükten sonra son saniyeler ağır çekimde tekrar oynatılır.
 - **Gündüz ve gece:** *Time of day* ayarı (menü veya duraklatma ekranı) yıldızlı, ay ışıklı bir geceye geçer: koyu pus, şehirde yanan pencereler ve parlayan pist kenar ışıkları; her uçakta kırmızı/yeşil seyir ışıkları, beyaz kuyruk ışığı, çift çakan strob ve kırmızı beacon, iniş takımı açıkken de oyuncunun önündeki pisti aydınlatan iniş farı var. Art yakıcılar ve patlamalar öne çıkar. Uçuş sırasında da değiştirilebilir.
 - **Sabit adımlı simülasyon:** çekirdek kare hızından bağımsız olarak her adımda 1/60 sn ilerler, görüntü adımlar arasında interpolasyon yapar.
