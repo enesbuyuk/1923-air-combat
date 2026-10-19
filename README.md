@@ -6,7 +6,7 @@
 
 **English** | [Türkçe](README.tr.md)
 
-**Browser-based flight and dogfighting game over the skies of Istanbul**
+**Browser-based flight and combat simulator over the skies of Istanbul**
 
 Take off from the Turkish Air Base (LTBX), shoot down enemy waves, and land back on the runway in one piece.
 
@@ -29,6 +29,7 @@ Take off from the Turkish Air Base (LTBX), shoot down enemy waves, and land back
 
 - [Screenshots](#screenshots)
 - [Features](#features)
+- [Simulator review and next steps (Turkish)](docs/simulator-review.tr.md)
 - [Aircraft](#aircraft)
 - [Quick Start](#quick-start)
 - [Controls](#controls)
@@ -55,25 +56,29 @@ Captured from the game running locally. Click an image to view it at full size.
 
 ## Features
 
-- **Rust → WebAssembly game core:** flight physics, takeoff/landing, stall, bot AI, cannon rounds, guided missiles with lock-on, flares, collisions, wave system and missions. No external dependencies, ~80 KB.
+- **Rust → WebAssembly game core:** flight physics, takeoff/landing, stall, bot AI, cannon rounds, guided missiles with lock-on, flares, collisions, wave system and missions. No external dependencies, ~130 KB.
 - **Flight physics:** a real velocity vector with angle of attack and sideslip; lift and drag scale with ISA air density and airspeed², so turns are limited by speed (corner speed) and a per-aircraft G limit, and hard pulls bleed energy through induced drag. Transonic drag rise near Mach 1, thrust that thins with altitude, engine spool lag, ground effect, and wind with gusts and low-level turbulence (crosswind crabbing on approach, weathervaning on the runway).
 - **Six-degree-of-freedom rigid body:** aerodynamic moments (static stability, pitch / roll / yaw damping, dihedral, control surfaces, stall break, wing drop and autorotation) and gyroscopic inertia coupling (Euler's equations) turn the airframe. A fly-by-wire flight control computer with AoA / G limiter, auto-trim, turn coordination and rolls about the flight path drives rate-limited control surfaces by dynamic inversion of the unstalled airframe, so a slow or stalled aircraft runs out of authority on its own. Everything advances with a fourth-order Runge-Kutta integrator at 120 Hz.
 - **Fuel and weight:** fuel flow rises steeply in afterburner; a full tank is heavier (higher stall speed, slower climb) and a dry tank flames the engine out.
 - **Energy and limits:** controls stiffen at high speed, so an aircraft turns and rolls best near corner speed, not at top speed; rolling while pulling hard is slower. Holding the stick back in a ruddered stall autorotates into a spin (stick forward and opposite rudder to recover), and diving past the structural speed limit damages the airframe (OVERSPEED).
 - **Real performance envelope:** thrust-to-weight close to the real aircraft (F-16 ~1.1, B-2 ~0.4), thrust lapse with altitude that steepens above the tropopause (so each aircraft has a service ceiling), afterburner thrust that grows with Mach, and fuel flow that jumps when the afterburner is lit. Cannon rounds slow down with drag and spread; missiles burn for five seconds, fuse at the closest pass and do less damage the further they miss; modern seekers reject most flares; aircraft that touch in the air are both lost.
-- **Realism setting (Arcade / Simulator):** Simulator removes the cannon aim assist and the enlarged hitboxes, loads real ammunition (F-16: 511 rounds, about five seconds of fire; the B-2 carries no air-to-air weapons), tightens the landing limits (gear breaks above 6 m/s sink or 20 deg of bank, tyres burst on a too-fast touchdown), drops the invisible turn at the edge of the area (30 s to return or the aircraft is lost), takes the ground crew 90 s, and makes an enemy missile hit lethal.
+- **Simulator only:** every mission uses the same fixed rules: no cannon aim assist or extra hitbox enlargement; aircraft-specific ammunition (F-16: 511 rounds; player and bot B-2s carry no cannon or air-to-air missiles); strict landing limits (6 m/s sink, about 20° bank and a tyre ground-speed limit); manual return at the mission boundary (30 s before the aircraft is lost); and 90 s ground servicing. Enemy and player missiles use the same warhead damage. There is no realism toggle.
+- **Manual landing gear and flaps:** `G` commands the gear; `Z` cycles clean / takeoff / landing flaps. Actuators take time, gear adds drag, flaps add lift and drag and lower the stall speed. Excess airspeed can damage and jam them. Gear-up, incomplete or badly damaged gear cannot make a normal wheel landing.
+- **Terrain and surfaces:** the renderer and physics query the same deterministic height field. The airfield stays level; hills affect AGL, ground effect, ground contacts and sensor masking. Asphalt and soil have different rolling resistance and braking; water contact is fatal. Terrain and coastline are representative procedural data, not a surveyed Istanbul DEM.
+- **Sensors:** radar and visual acquisition use range, scan cone and line of sight through terrain and the rendered building footprints. Contacts refresh four times per second; a lost contact remains at its last known position for 1.5 s, marked MEM, then expires. Hidden aircraft do not broadcast live positions to the HUD.
 - **System damage:** hits can knock out the engine (less thrust), the flight controls (sluggish pitch and roll) or hole the fuel tank (leak), on top of hull damage.
-- **Ground crew:** taxi into one of the five hangars on the airfield and stop with the throttle at idle; the crew rearms, refuels and repairs the aircraft in a few seconds. Nowhere else.
-- **Enemies fly the same flight model:** bot AI only moves the stick and throttle, so enemies bleed energy in turns, can stall and must avoid the ground. Tactics: patrol, lead / pure / lag pursuit, a max-G break turn against an attacker on the tail, missile evasion with flares, and recovery when low or slow.
+- **Ground crew:** taxi into one of the five hangars on the airfield and stop with the throttle at idle; the crew rearms, refuels and repairs the aircraft in 90 seconds. Nowhere else.
+- **Enemies fly the same flight model:** bot AI only moves the stick and throttle, so enemies bleed energy in turns, can stall and must avoid the ground. Player and AI use the same fuel consumption, weapon capacities, gun cadence, dispersion, projectile speed, warhead damage, damage probabilities and overspeed limits. Difficulty changes pilot behaviour (decisions, aim, lock time, missile range and cadence) and the wave size, not hull health or weapon damage. Bots return when low on fuel or out of weapons and operate their gear/flaps for the approach; a safe touchdown retires the sortie. Tactics include patrol, pursuit, defensive turns, missile evasion and low-altitude recovery.
 - **Missiles with real energy:** proportional navigation guidance, a rocket motor that burns for a few seconds and then coasts, drag that grows with air density, fins that lose authority when slow, and a seeker gimbal limit. A late, slow missile can be out-turned; a distant fleeing target cannot be run down.
-- **Countermeasures and radar warning:** enemy fighters lock on and fire missiles from the second wave; the RWR tone, HUD and radar show locks and incoming missiles with their bearing. Flares can seduce a missile; a tail-on seeker staring at a hot engine is the hardest to fool, so cut the throttle and turn.
+- **Countermeasures and warning:** fighters carry their aircraft’s missile load from the first wave. Air-to-air infrared seekers are passive and do not trigger the RWR; radar-guided SAM locks do. The missile warning system needs line of sight and detects threats within 8 km. Flares can seduce IR missiles, while radar-guided SAMs must be evaded or masked by terrain/buildings.
 - **Missions:** endless *Waves*, *Strike* (destroy the SAM sites of each target area; they fire at anything above their radar horizon, so fly low) *Escort* (protect a friendly B-2 around its route) and *Free* (no enemies, just fly).
 - **Kill cam:** after being shot down, the last seconds replay in slow motion.
+- **Day and night:** the *Time of day* setting (menu or pause screen) switches to a moonlit night with stars, a dark haze, lit windows across the city and glowing runway edge lights; every aircraft shows red/green position lights, white tail light, double-flashing strobes and a red beacon, and with the gear down a landing light that lights the runway ahead of the player. Afterburners and explosions stand out. It can be changed mid-flight.
 - **Fixed-step simulation:** the core always advances 1/60 s per step regardless of frame rate, and rendering interpolates between steps.
 - **Gamepad and touch:** standard-mapping gamepads work out of the box; touch screens get an on-screen stick, throttle and buttons.
 - **Real world:** Esri World Imagery satellite tiles (3 zoom levels); runways, aprons and helipads from OpenStreetMap geometry (18/36 main runway 1415 m, 04/22 crosswind runway).
 - **Endless procedural city:** unfolds around you as you fly, a different Istanbul skyline every game.
-- **Lock-on missiles and auto-aimed cannon**
+- **Lock-on missiles and unassisted cannon fire**
 - **Pilot career:** every kill adds to a career total saved in the browser; it promotes you from Cadet (0) through Second Lieutenant (5), First Lieutenant (15), Captain (30), Major (60), Lieutenant Colonel (100), Colonel (175), Brigadier General (275), Major General (400) and Lieutenant General (600) to General (900).
 - **Synthesized audio:** engine, weapons and explosions are generated live with WebAudio. The only recorded sound is the "Pull up, pull up" ground-proximity voice warning (`web/audio/pull_up.mp3`).
 - **No installation:** runs in the browser.
@@ -84,7 +89,7 @@ Captured from the game running locally. Click an image to view it at full size.
 |---|---|
 | **F-16 Fighting Falcon** | Balanced, agile |
 | **F-22 Raptor** | Fastest and most agile |
-| **B-2 Spirit** | Slow, sluggish, very durable, 16 missiles |
+| **B-2 Spirit** | Strategic bomber; no cannon or air-to-air missiles (bombing is not yet implemented) |
 | **KAAN MMU** | Fast, agile, 8 missiles |
 
 Enemies are red-tinted versions of the same models. From wave 3 onward, every wave includes one **B-2** (500 points).
@@ -121,30 +126,33 @@ cd 1923-air-combat
 | `Q` `E` | Rudder (nose wheel on the ground) |
 | `Shift` / `R` | Throttle up |
 | Left `Ctrl` / `F` | Throttle down (in fullscreen, `Ctrl+W` won't close the tab) |
-| `Space` / left click | Cannon, auto-aims at targets within ~10° of the nose |
+| `Space` / left click | Cannon along the bore axis, with dispersion and ballistic drop; no aim assist |
 | `X` / right click | Missile, keep the target inside a 30° cone for ~0.6 s to lock on |
 | `C` | Flares (hold to keep dropping) |
 | `B` | Wheel brake on the ground, airbrake in the air |
+| `G` | Command landing gear up / down (retraction inhibited on the ground) |
+| `Z` | Cycle flaps: up / takeoff (50%) / landing (100%) |
 | `V` | Camera (cockpit / chase) |
 | `H` | Show / hide controls list |
 | Mouse wheel | Chase camera zoom |
 | Middle mouse drag | Look around (cockpit) / orbit (chase) |
 | `I` | Invert pitch axis |
 | `M` | Toggle sound |
+| `N` | Toggle warning sounds (RWR, launch, pull up) |
 | `Esc` | Pause |
 
-**Gamepad** (standard mapping): left stick pitch and roll, right stick rudder, `RT` / `LT` throttle up / down, `A` cannon, `B` missile, `X` or `RB` flares, `LB` brake, `Y` camera, `Start` pause.
+**Gamepad** (standard mapping): left stick pitch and roll, right stick rudder, `RT` / `LT` throttle up / down, `A` cannon, `B` missile, `X` or `RB` flares, `LB` brake, D-pad up gear, D-pad down flaps, `Y` camera, `Start` pause.
 
 **Touch screens:** an on-screen stick (bottom left), a throttle slider and weapon buttons (bottom right) appear while flying.
 
 ## Game Modes
 
-Pick the mode in the menu or the pause screen.
+Pick the mission in the menu or the pause screen. All missions use simulator flight rules.
 
 | Mode | Goal |
 |---|---|
-| **Waves** | Endless enemy waves. Enemy fighters carry no missiles in the first wave and up to two later (one on easy). |
-| **Strike** | Destroy every SAM site of the target area with cannon or missiles (they lock like aircraft). Each site locks on and fires at an aircraft above ~120 m within 7 km; flying lower keeps you off its radar. A cleared area pays a bonus and the next, larger one appears. Smaller enemy waves fly cover. |
+| **Waves** | Endless enemy waves with aircraft-specific fuel and weapon loads. Later waves increase numbers and pilot skill. |
+| **Strike** | Destroy every SAM site of the target area with cannon or missiles (they lock like aircraft). Each site acquires an aircraft above ~120 m AGL within 7 km when its line of sight is clear; terrain and buildings can mask you. A cleared area pays a bonus and the next, larger one appears. Smaller enemy waves fly cover. |
 | **Escort** | A friendly B-2 (blue on the HUD and radar) flies a circuit around the base. Enemy fighters go for it; bring it around eight legs for the bonus. |
 | **Free** | No enemies, no SAM sites, no objectives. Just fly around the city. |
 
@@ -159,13 +167,14 @@ Pick the mode in the menu or the pause screen.
 1. Cut throttle with `Ctrl`, open the airbrake with `B`.
 2. Slow to ~300-350 km/h and set up a shallow (~3°) glide; the nose sits ~10° above the flight path marker (that is the angle of attack). The engine needs a few seconds to spool, so add power early.
 3. In the last 25 m, ground effect softens the descent; raise the nose slightly with `S` (flare). In a crosswind the aircraft crabs into the wind; the wheels straighten it on touchdown.
-4. Landing gear deploys automatically when low and slow. With the throttle back on the runway the lift dumpers keep the aircraft down, so holding the flare through touchdown does not bounce it back into the air.
+4. Lower the gear with `G` below 155 m/s equivalent airspeed; allow 3 seconds for full deployment. Cycle flaps with `Z`, extending landing flaps below 105 m/s equivalent airspeed; allow 2 seconds for full travel. Verify gear DOWN and healthy before touchdown. Retract gear and flaps after establishing a positive climb on takeoff. With idle throttle on the runway, lift dumpers keep the aircraft down.
 
-| Limit (Arcade) | Value |
+| Touchdown limit | Value |
 |---|---|
-| Vertical speed | < 22 m/s (above 10 m/s damages the airframe, but never destroys it) |
-| Bank | < ~45° |
+| Sink rate | < 6 m/s; above 3 m/s damages the airframe and can destroy an already damaged aircraft |
+| Bank | < ~20° (the combined pitch and bank affect the limit) |
 | Nose | < ~20° down |
+| Ground speed | < 2 × the nominal 1 G stall speed (F-16: 110 m/s, 396 km/h) |
 
 Harder landings or steep dives end in an explosion. Buildings under the approach paths of both runways are kept below a 1:40 obstacle surface, so a normal glide clears them.
 
@@ -237,7 +246,7 @@ web/js/camera.js               menu, cockpit, chase, wreck and kill-cam cameras
 web/js/airflow.js              airflow streaks and buffet level (gusts, turbulence, high alpha)
 web/js/vortex.js               wingtip vortex ropes (circulation, sink, roll-up, ground effect, core growth)
 web/js/vapor.js                wing vapor over the upper wing in hard pulls, transonic vapor cone
-web/js/atmosphere.js           sky, image-based lighting, altitude-dependent haze (aerial perspective)
+web/js/atmosphere.js           day and night sky, image-based lighting, altitude-dependent haze (aerial perspective)
 web/js/clouds.js               cumulus field around the camera, whiteout inside a cloud
 web/js/post.js                 post-processing: heat shimmer, cloud whiteout, bloom, tone mapping
 web/js/flyby.js                other aircraft heard nearby (Doppler, panning) and sonic booms
@@ -248,9 +257,10 @@ web/js/replay.js               kill-cam recording and slow-motion replay
 web/js/ground.js               SAM site models (strike mode)
 web/js/gforce.js               G blackout / G-LOC effect
 web/js/menu.js                 aircraft selection menu
-web/js/settings.js             realism / game mode / difficulty / enemy density settings
+web/js/settings.js             mission / difficulty / enemy density settings
 web/js/collision.js            building collision tests
 web/js/models.js               procedural aircraft + GLB loader
+web/js/navlights.js            aircraft position lights, strobes, beacon and landing light (night)
 web/js/world.js                satellite ground, runways, sky
 web/js/buildings.js            real buildings from OSM (around the airport)
 web/js/city.js                 streaming procedural city (Kenney models)
