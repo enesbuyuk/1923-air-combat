@@ -24,6 +24,41 @@ const BLOOM_THRESHOLD = 5;
 const BLOOM_STRENGTH = 0.45;
 const BLOOM_RADIUS = 0.5;
 /**
+ * Luminance a pixel brings into the bloom at most. UnrealBloomPass cuts its Gaussian off
+ * at one sigma, where the weight is still ~60 % of the centre, so a highlight tens of
+ * times brighter than white (a strobe, a glint on the canopy) blurs into a hard-edged
+ * square per mip instead of a soft halo.
+ */
+const BLOOM_MAX = 12;
+
+// LuminosityHighPassShader with the BLOOM_MAX clamp; the same uniforms, so the pass can use it.
+const HighPassShader = {
+  uniforms: {
+    tDiffuse: { value: null },
+    luminosityThreshold: { value: BLOOM_THRESHOLD },
+    smoothWidth: { value: 0.01 },
+  },
+  vertexShader: /* glsl */ `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: /* glsl */ `
+    uniform sampler2D tDiffuse;
+    uniform float luminosityThreshold;
+    uniform float smoothWidth;
+    varying vec2 vUv;
+    void main() {
+      vec3 c = texture2D(tDiffuse, vUv).rgb;
+      float l = dot(c, vec3(0.299, 0.587, 0.114));
+      float k = smoothstep(luminosityThreshold, luminosityThreshold + smoothWidth, l);
+      gl_FragColor = vec4(c * (k * min(1.0, ${BLOOM_MAX.toFixed(1)} / max(l, 1e-4))), 1.0);
+    }
+  `,
+};
+/**
  * Above this pixel ratio a pixel is small enough that 2× MSAA looks as smooth as 4×,
  * at half the cost of the most expensive target in the frame.
  */
@@ -118,6 +153,13 @@ export class PostFx {
     // Only its passes and targets are used (render() is not): the bloom stays in its own
     // texture instead of being blended back into the scene.
     this.bloom = new UnrealBloomPass(size.clone().multiplyScalar(0.5), BLOOM_STRENGTH, BLOOM_RADIUS, BLOOM_THRESHOLD);
+    this.bloom.materialHighPassFilter.dispose();
+    this.bloom.materialHighPassFilter = new THREE.ShaderMaterial({
+      uniforms: THREE.UniformsUtils.clone(HighPassShader.uniforms),
+      vertexShader: HighPassShader.vertexShader,
+      fragmentShader: HighPassShader.fragmentShader,
+    });
+    this.bloom.highPassUniforms = this.bloom.materialHighPassFilter.uniforms;
     this.bloomOn = true;
     this.output = new THREE.RawShaderMaterial({
       uniforms: THREE.UniformsUtils.clone(OutputShader.uniforms),

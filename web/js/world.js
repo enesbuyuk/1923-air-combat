@@ -9,6 +9,7 @@ import { loadBuildings } from './buildings.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { FootprintGrid, footprint } from './collision.js';
+import { glowTexture } from './navlights.js';
 
 // Reference point (world origin) near the LTBX aerodrome reference point.
 const LAT0 = 40.993;
@@ -391,7 +392,11 @@ function addRunwayLights(group, r, length) {
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
-  const mat = new THREE.PointsMaterial({ color: 0xfff2c0, size: 2.2, sizeAttenuation: true });
+  // Without a map a point is a square, which blooms into a glowing block at night.
+  const mat = new THREE.PointsMaterial({
+    color: 0xfff2c0, size: 2.2, sizeAttenuation: true, map: glowTexture(),
+    transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
+  });
   // At night the edge lights burn brighter than white, so they bloom (post.js).
   onTimeOfDay((night) => mat.color.set(0xfff2c0).multiplyScalar(night ? 6 : 1));
   group.add(new THREE.Points(g, mat));

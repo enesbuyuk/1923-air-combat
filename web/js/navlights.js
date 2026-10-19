@@ -27,7 +27,7 @@ let glowTex = null;
  * Lit far above white the core saturates into a crisp point while the halo stays soft;
  * a flat-topped gradient would saturate into a hard-edged disc instead.
  */
-function glowTexture() {
+export function glowTexture() {
   if (!glowTex) {
     const n = 128;
     const c = document.createElement('canvas');
@@ -133,7 +133,7 @@ export function createLights(group, wing, def) {
   const nose = Math.min(wing.rootLE, 0) - def.length * 0.12;
   const landing = sprite(root, LANDING, [0, y - 0.6, nose], 0.9, 0, null, true);
   group.add(root);
-  return { root, landing, tip: wing.tip, phase };
+  return { root, landing, tip: wing.tip, nose: wing.nose, phase };
 }
 
 /** Per frame: lights on at night, the landing light with the gear down. */
@@ -150,7 +150,7 @@ export function updateLights(lights, gearDown) {
  */
 export class PlayerLights {
   constructor(scene) {
-    this.landing = new THREE.SpotLight(0xfff4e0, 0, 0, 0.42, 0.5, 2);
+    this.landing = new THREE.SpotLight(0xfff4e0, 0, 0, 0.3, 0.6, 2);
     this.left = new THREE.PointLight(0xff2010, 0, 5, 2);
     this.right = new THREE.PointLight(0x30c058, 0, 5, 2);
     for (const l of [this.landing, this.left, this.right]) l.castShadow = false;
@@ -164,7 +164,7 @@ export class PlayerLights {
   update(group, lights, gearDown, alive) {
     const on = night && alive;
     const l = this.landing;
-    l.intensity = on && gearDown ? 80000 : 0;
+    l.intensity = on && gearDown ? 60000 : 0;
     const flash = on ? strobe(performance.now() / 1000 + lights.phase) : 0;
     this.left.intensity = this.right.intensity = on ? 2 + flash * 60 : 0;
     this.left.color.set(flash ? 0xffffff : 0xff2010);
@@ -176,9 +176,12 @@ export class PlayerLights {
     this.left.position.set(-x - 0.3, y + 0.4, z).applyMatrix4(group.matrixWorld);
     this.right.position.set(x + 0.3, y + 0.4, z).applyMatrix4(group.matrixWorld);
     if (!l.intensity) return;
-    l.position.set(0, -0.5, -3).applyMatrix4(group.matrixWorld);
+    // Just ahead of the nose tip, so the whole airframe is behind the cone: from the lamp
+    // under the fuselage it would floodlight the nose gear, its doors and the canopy.
+    const [, ny, nz] = lights.nose;
+    l.position.set(0, ny - 0.3, nz - 0.5).applyMatrix4(group.matrixWorld);
     // Aimed a few degrees below the nose, where the runway is on an approach.
-    l.target.position.set(0, -12, -100).applyMatrix4(group.matrixWorld);
+    l.target.position.set(0, -6, -100).applyMatrix4(group.matrixWorld);
     l.target.updateMatrixWorld();
   }
 }
