@@ -913,3 +913,85 @@ fn the_density_table_matches_the_isa_formula() {
         assert!((a - b).abs() < 1e-4 * b.max(0.01), "h {h}: {a} vs {b}");
     }
 }
+
+#[test]
+fn liftoff_is_seamless() {
+    let mut g = calm(F16);
+    let mut last = (g.player.pos.y, 0.0f32, 0.0f32);
+    let mut worst = (0.0f32, 0.0f32);
+    let mut lifted = None;
+    for i in 0..(30.0 / DT) as usize {
+        let rotate = g.player.speed > STATS[F16].rotate_speed;
+        let was_ground = g.player.on_ground;
+        run(&mut g, DT, Input { throttle: 1.0, pitch: if rotate { 1.0 } else { 0.0 }, ..Input::default() });
+        let p = &g.player;
+        let (y, pitch) = (p.pos.y, p.fwd().y.asin());
+        let rate = (pitch - last.1) / DT;
+        if was_ground && !p.on_ground {
+            lifted = Some(i);
+        }
+        if lifted.is_some_and(|l| i <= l + 3) {
+            // Around liftoff: no jump in height, no snap or stall of the pitch rate.
+            worst.0 = worst.0.max((y - last.0).abs());
+            worst.1 = worst.1.max((rate - last.2).abs());
+        }
+        assert!(!(lifted.is_some() && p.on_ground), "touched down again after liftoff");
+        last = (y, pitch, rate);
+    }
+    assert!(lifted.is_some(), "never lifted off");
+    assert!(worst.0 < 0.02, "height step {} m", worst.0);
+    assert!(worst.1 < 0.03, "pitch rate step {} rad/s", worst.1);
+}
+
+#[test]
+fn holding_the_flare_through_touchdown_does_not_bounce() {
+    // Stick held back at touchdown, throttle idle: the lift dumpers keep it on the runway.
+    let mut g = airborne(F16, GEAR_HEIGHT + 1.0, 95.0, 0.0);
+    g.player.vel = V3::new(0.0, -2.0, -95.0);
+    g.player.q = Q::look(V3::new(0.0, 0.15, -1.0).norm(), UP);
+    let mut touched = false;
+    for _ in 0..(10.0 / DT) as usize {
+        let brake = g.player.on_ground;
+        run(&mut g, DT, Input { pitch: 0.6, brake, ..Input::default() });
+        touched |= g.player.on_ground;
+        assert!(!touched || g.player.on_ground, "bounced back into the air");
+    }
+    assert!(touched && g.player.alive, "no landing");
+}
+
+#[test]
+fn an_arcade_hard_landing_does_not_destroy_a_damaged_aircraft() {
+    let mut g = airborne(F16, GEAR_HEIGHT + 0.5, 90.0, 0.0);
+    g.player.hp = 10.0;
+    g.player.vel = V3::new(0.0, -(MAX_SINK_RATE - 1.0), -90.0);
+    g.player.q = Q::look(V3::new(0.0, 0.05, -1.0).norm(), UP);
+    run(&mut g, 0.5, throttle(0.0));
+    assert!(g.player.on_ground && g.player.alive, "destroyed by a landing inside the limits");
+    assert!(g.player.hp < 10.0, "no hard landing damage");
+}
+
+#[test]
+fn full_stick_at_liftoff_climbs_out_gently() {
+    // Takeoff gains: the nose keeps its rotation pace and the climb builds up, rather than
+    // the aircraft leaping off the runway the moment the wheels leave it.
+    for ty in [F16, B2] {
+        let mut g = calm(ty);
+        let mut lifted = None;
+        let (mut vy, mut max_accel) = (0.0f32, 0.0f32);
+        for i in 0..(60.0 / DT) as usize {
+            run(&mut g, DT, Input { throttle: 1.0, pitch: 1.0, ..Input::default() });
+            if lifted.is_none() && !g.player.on_ground {
+                lifted = Some(i);
+            }
+            if let Some(l) = lifted {
+                max_accel = max_accel.max((g.player.vel.y - vy) / DT);
+                if i > l + (1.5 / DT) as usize {
+                    break;
+                }
+            }
+            vy = g.player.vel.y;
+        }
+        assert!(lifted.is_some(), "never lifted off");
+        assert!(max_accel < 0.6 * GRAVITY, "aircraft {ty} leapt off at {max_accel} m/s^2");
+    }
+}

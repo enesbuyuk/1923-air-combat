@@ -121,9 +121,11 @@ function addBuilding(b, pts, h, wall, roof, base) {
 
 /**
  * Load data/buildings.json, add the meshes to `scene` and the footprints to `colliders`.
+ * `ceiling(pts)` caps a building's height (runway approach surfaces); one capped below a
+ * single storey is left out.
  * Resolves to the radius (m) the data covers, or 0 when it is missing.
  */
-export async function loadBuildings(scene, colliders) {
+export async function loadBuildings(scene, colliders, ceiling = () => Infinity) {
   let data;
   try {
     const res = await fetch('data/buildings.json');
@@ -154,6 +156,8 @@ export async function loadBuildings(scene, colliders) {
     cx /= n;
     cz /= n;
     if (!data.radius) radius = Math.max(radius, Math.hypot(cx, cz));
+    const height = Math.min(data.h[i] / 10, ceiling(pts));
+    if (height < FLOOR) continue;
     const [walls, roofs] = PALETTE[data.kind[i]] || PALETTE[0];
     const r = hash(i);
     wall.setHex(walls[(r * walls.length) | 0]).multiplyScalar(0.9 + hash(i + 7919) * 0.15);
@@ -162,8 +166,8 @@ export async function loadBuildings(scene, colliders) {
     let b = cells.get(key);
     if (!b) cells.set(key, (b = new CellBuilder()));
     // Sink the base a little so it never floats over the lower imagery layers.
-    addBuilding(b, pts, data.h[i] / 10, wall, roof, -1);
-    colliders.add(footprint(pts, data.h[i] / 10 - 1));
+    addBuilding(b, pts, height, wall, roof, -1);
+    colliders.add(footprint(pts, height - 1));
   }
   const group = new THREE.Group();
   for (const b of cells.values()) {

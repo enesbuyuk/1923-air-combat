@@ -121,6 +121,11 @@ pub const GEAR_PITCH_DAMPING: f32 = 9.0;
 pub const GEAR_PITCH_PER_ACCEL: f32 = 0.0015;
 /// Distance (m) the origin sits ahead of the main wheels: rotating on them lifts the origin.
 pub const MAIN_GEAR_ARM: f32 = 1.2;
+/// Lift dumpers: on the wheels with the throttle below LIFT_DUMP_THROTTLE the spoilers
+/// spill this share of the lift, so a landing aircraft stays down instead of bouncing back
+/// into the air. Takeoff power retracts them.
+pub const LIFT_DUMP: f32 = 0.6;
+pub const LIFT_DUMP_THROTTLE: f32 = 0.5;
 
 // Aerodynamics (accelerations are per unit mass, so thrust/drag are in m/s^2).
 /// Induced drag per unit lift at maximum lift coefficient.
@@ -199,6 +204,14 @@ pub const FCS_YAW_GAIN: f32 = 4.0;
 pub const FCS_ALPHA_LIMIT_GAIN: f32 = 6.0;
 /// Sideslip (rad) full rudder pedal asks for at combat speed.
 pub const PEDAL_BETA: f32 = 0.15;
+/// Takeoff and landing gains (player): low and slow, full stick asks for no more pitch rate
+/// than the rotation on the runway (ROTATE_RATE) and no longer drags the AoA to the limit,
+/// so the nose keeps one pace through liftoff and the flare. The gains fade out by
+/// LOW_GAIN_HEIGHT (m) above the runway, and between LOW_GAIN_SPEED and LOW_GAIN_SPEED +
+/// LOW_GAIN_FADE (equivalent airspeed over the stall speed).
+pub const LOW_GAIN_HEIGHT: f32 = 60.0;
+pub const LOW_GAIN_SPEED: f32 = 1.7;
+pub const LOW_GAIN_FADE: f32 = 0.8;
 
 // Weather.
 pub const WIND_MIN: f32 = 2.0;
@@ -219,13 +232,14 @@ pub const TURBULENCE_HEIGHT: f32 = 500.0;
 pub const SUBSTEPS: u32 = 2;
 pub const MAX_STEP: f32 = 0.05;
 
-// Touchdown limits: steeper, faster or more banked than this is a crash.
-pub const MAX_SINK_RATE: f32 = 18.0;
-/// Sink rate (m/s) above which a landing damages the hull.
-pub const HARD_LANDING_SINK: f32 = 8.0;
-pub const HARD_LANDING_DAMAGE: f32 = 7.0;
-/// Minimum up-vector y (~40 deg of bank).
-pub const MIN_LANDING_UP: f32 = 0.75;
+// Touchdown limits (Arcade): steeper, faster or more banked than this is a crash. A
+// landing within them damages the hull but never destroys the aircraft.
+pub const MAX_SINK_RATE: f32 = 22.0;
+/// Sink rate (m/s) above which a landing damages the hull, and the damage per m/s beyond.
+pub const HARD_LANDING_SINK: f32 = 10.0;
+pub const HARD_LANDING_DAMAGE: f32 = 4.0;
+/// Minimum up-vector y (~45 deg of bank).
+pub const MIN_LANDING_UP: f32 = 0.7;
 /// Minimum forward-vector y (~20 deg nose down).
 pub const MIN_LANDING_NOSE: f32 = -0.35;
 

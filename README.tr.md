@@ -163,15 +163,15 @@ Modu menüden veya duraklatma ekranından seç.
 1. `Ctrl` ile gazı kes, `B` ile hava frenini aç.
 2. ~300-350 km/s hıza düş ve burun hafif aşağıda süzül.
 3. Son 25 m'de yer etkisi alçalmayı yumuşatır; `S` ile burnu hafifçe kaldır (flare).
-4. İniş takımları alçak ve yavaşken otomatik açılır.
+4. İniş takımları alçak ve yavaşken otomatik açılır. Pistte gaz geri çekiliyken spoyler'ler taşımayı keser; teker değerken flare'i tutmak uçağı tekrar havaya sektirmez.
 
-| Limit | Değer |
+| Limit (Arcade) | Değer |
 |---|---|
-| Dikey hız | < 18 m/s (8 m/s üzeri gövdeye hasar verir) |
-| Yatış | < ~40° |
+| Dikey hız | < 22 m/s (10 m/s üzeri gövdeye hasar verir ama uçağı yok etmez) |
+| Yatış | < ~45° |
 | Burun | < ~20° aşağı |
 
-Daha sert inişler veya dik dalışlar patlamayla biter.
+Daha sert inişler veya dik dalışlar patlamayla biter. İki pistin yaklaşma koridorlarındaki binalar 1:40 eğimli engel yüzeyinin altında tutulur; normal bir süzülüş bunların üzerinden geçer.
 
 ## 3D Modeller
 

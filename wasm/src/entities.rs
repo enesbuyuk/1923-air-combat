@@ -46,6 +46,8 @@ pub struct Airframe {
     pub fuel_leak: f32,
     /// Thrust multiplier (difficulty tuning of enemy aircraft).
     pub thrust_scale: f32,
+    /// Flight controls switch to takeoff and landing gains low and slow (the player's).
+    pub low_gains: bool,
 }
 
 impl Airframe {
@@ -73,6 +75,7 @@ impl Airframe {
             control_health: 1.0,
             fuel_leak: 0.0,
             thrust_scale: 1.0,
+            low_gains: false,
         }
     }
     pub fn stats(&self) -> Stats {
@@ -116,6 +119,9 @@ pub struct Player {
     pub gear_vel: f32,
     pub gear_pitch: f32,
     pub gear_pitch_vel: f32,
+    /// Attitude the airframe touched down with, relative to the one its struts give it;
+    /// eases out to identity on the ground roll.
+    pub settle: Q,
     pub ammo: f32,
     pub missiles: f32,
     pub flares: f32,
@@ -163,6 +169,7 @@ impl Player {
             gear_vel: 0.0,
             gear_pitch: 0.0,
             gear_pitch_vel: 0.0,
+            settle: Q::IDENTITY,
             ammo: 0.0,
             missiles: 0.0,
             flares: s.flares,
@@ -175,6 +182,7 @@ impl Player {
             max_missiles: 0.0,
             outside: 0.0,
         };
+        p.af.low_gains = true;
         p.loadout(realism, true);
         p
     }
@@ -299,6 +307,7 @@ impl Bot {
             control_health: 1.0,
             fuel_leak: 0.0,
             thrust_scale: 1.0,
+            low_gains: false,
         },
         alive: false,
         friendly: false,

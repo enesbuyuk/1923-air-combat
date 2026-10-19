@@ -19,11 +19,12 @@ export function footprint(pts, top) {
 }
 
 /**
- * Sphere (x, y, z, r) against footprint `f`. Returns null, or
- * { nx, nz, depth }: the horizontal way out of the building and how far to move.
+ * Body at (x, y, z) reaching `r` sideways and `below` down (a sphere by default) against
+ * footprint `f`. Returns null, or { nx, nz, depth }: the horizontal way out of the
+ * building and how far to move.
  */
-export function hitFootprint(f, x, y, z, r) {
-  if (y - r > f.top) return null;
+export function hitFootprint(f, x, y, z, r, below = r) {
+  if (y - below > f.top) return null;
   if (x + r < f.minX || x - r > f.maxX || z + r < f.minZ || z - r > f.maxZ) return null;
   const p = f.xz;
   const n = p.length / 2;
@@ -75,14 +76,14 @@ export class FootprintGrid {
       }
     }
   }
-  hit(x, y, z, r) {
+  hit(x, y, z, r, below = r) {
     const c = this.cell;
     for (let i = Math.floor((x - r) / c); i <= Math.floor((x + r) / c); i++) {
       for (let j = Math.floor((z - r) / c); j <= Math.floor((z + r) / c); j++) {
         const list = this.cells.get(i * 65536 + j);
         if (!list) continue;
         for (const f of list) {
-          const h = hitFootprint(f, x, y, z, r);
+          const h = hitFootprint(f, x, y, z, r, below);
           if (h) return h;
         }
       }

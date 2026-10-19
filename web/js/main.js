@@ -250,6 +250,9 @@ $('fs-btn').onclick = () => {
 // Simulation
 // ---------------------------------------------------------------------------
 
+/** Depth (m) of the airframe below its origin with the wings level: the wheels. */
+const BELLY_DEPTH = 2.5;
+
 /**
  * Sweep the player from `from` to where the step left it, in radius-sized hops so fast
  * aircraft can't skip through a building between steps, and report the first hit.
@@ -258,6 +261,11 @@ function checkBuildings(from) {
   const p = sim.player();
   if (!p.alive) return;
   const r = AIRCRAFT[p.type].hitRadius;
+  // The hit radius spans the wings: level, the airframe only reaches the wheels below its
+  // origin; banked, the low wingtip dips by the radius times the sine of the bank.
+  const [qx, , qz] = p.quat;
+  const upY = 1 - 2 * (qx * qx + qz * qz);
+  const below = Math.max(BELLY_DEPTH, r * Math.sqrt(Math.max(0, 1 - upY * upY)));
   const dx = p.x - from.x;
   const dy = p.y - from.y;
   const dz = p.z - from.z;
@@ -267,7 +275,7 @@ function checkBuildings(from) {
     const x = from.x + dx * t;
     const y = from.y + dy * t;
     const z = from.z + dz * t;
-    const hit = world.collide(x, y, z, r);
+    const hit = world.collide(x, y, z, r, below);
     if (!hit) continue;
     const result = sim.buildingHit(x, y, z, hit);
     if (result === BUILDING_HIT.CRASH) hud.message('CRASHED INTO A BUILDING', COLORS.DANGER, 3);

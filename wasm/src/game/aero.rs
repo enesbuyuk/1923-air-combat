@@ -313,7 +313,14 @@ fn flight_controls(af: &Airframe, inp: &Input, e: &Env, l: &Loads) -> V3 {
     let mut alpha_trim = clamp(n_trim * alpha_1g, a_lo, a_hi);
     // Slow, the stick still holds the AoA it asks for: stick back keeps a stalled wing
     // stalled (and a spin spinning) until it is released.
-    let slow_hold = clamp((1.0 - pitch_auth) / 0.85, 0.0, 1.0) * inp.pitch.max(0.0);
+    // Takeoff and landing gains, 0 (off) to 1 (low and slow): see LOW_GAIN_HEIGHT.
+    let low = if af.low_gains {
+        let height = clamp(1.0 - (af.pos.y - GEAR_HEIGHT) / LOW_GAIN_HEIGHT, 0.0, 1.0);
+        height * clamp((LOW_GAIN_SPEED + LOW_GAIN_FADE - eas / s.stall_speed) / LOW_GAIN_FADE, 0.0, 1.0)
+    } else {
+        0.0
+    };
+    let slow_hold = clamp((1.0 - pitch_auth) / 0.85, 0.0, 1.0) * inp.pitch.max(0.0) * (1.0 - low);
     alpha_trim += (a_hi - alpha_trim) * slow_hold;
 
     // How fast the airflow itself turns about the body pitch and yaw axes: holding the AoA
@@ -322,7 +329,9 @@ fn flight_controls(af: &Airframe, inp: &Input, e: &Env, l: &Loads) -> V3 {
     let path_pitch = acc.dot(l.lift_dir) / l.v;
     let path_yaw = -acc.dot(l.side_dir) / l.v;
 
-    let mut cmd_pitch = inp.pitch * s.pitch_rate * pitch_auth * stiff + PITCH_STABILITY * stab * (alpha_trim - alpha);
+    let stick_rate = s.pitch_rate * pitch_auth * stiff;
+    let stick_rate = stick_rate + (stick_rate.min(ROTATE_RATE) - stick_rate) * low;
+    let mut cmd_pitch = inp.pitch * stick_rate + PITCH_STABILITY * stab * (alpha_trim - alpha);
     cmd_pitch = cmd_pitch.min(path_pitch + FCS_ALPHA_LIMIT_GAIN * (a_hi - alpha)).max(path_pitch + FCS_ALPHA_LIMIT_GAIN * (a_lo - alpha));
     // Under load the flight controls limit the roll rate.
     let roll_auth = 1.0 - ROLL_LOAD_REDUCTION * clamp(alpha.abs() / s.alpha_max, 0.0, 1.0);

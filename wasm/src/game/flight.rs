@@ -15,6 +15,12 @@ pub fn wheels_down_height(sin_pitch: f32) -> f32 {
     GEAR_HEIGHT + MAIN_GEAR_ARM * sin_pitch.max(0.0)
 }
 
+/// Attitude of an aircraft on its wheels rolling along `heading`, nose up by `pitch`.
+fn strut_attitude(heading: V3, pitch: f32) -> Q {
+    let right = heading.cross(UP).norm();
+    Q::look(Q::axis_angle(right, pitch).rotate(heading), UP)
+}
+
 impl Game {
     pub(super) fn update_player(&mut self, dt: f32) {
         if !self.player.alive {
@@ -68,7 +74,8 @@ impl Game {
         let airspeed = (p.speed - air.dot(p.heading)).max(0.0);
         let ge = ground_effect(GEAR_HEIGHT, s.span);
         let cl = lift_coefficient(p.rot, s.alpha_max);
-        let lift_g = cl * lift_scale(&s, airspeed, p.density, mass) * (1.0 + GROUND_EFFECT_LIFT * ge);
+        let dump = LIFT_DUMP * clamp((LIFT_DUMP_THROTTLE - p.throttle) / 0.2, 0.0, 1.0);
+        let lift_g = cl * lift_scale(&s, airspeed, p.density, mass) * (1.0 + GROUND_EFFECT_LIFT * ge) * (1.0 - dump);
         // Share of the weight still on the wheels (friction and brakes act through it).
         let wheels = clamp(1.0 - lift_g, 0.0, 1.0);
 
@@ -94,7 +101,9 @@ impl Game {
         // Raise the nose gradually above Vr; otherwise lower it gently
         // (also de-rotates after touchdown).
         let nose_up = p.rot > 0.0;
-        if p.speed > s.rotate_speed && inp.pitch > 0.2 {
+        let rotating = p.speed > s.rotate_speed && inp.pitch > 0.2;
+        let (pitch_before, y_before) = (p.rot + p.gear_pitch, p.pos.y);
+        if rotating {
             p.rot = (p.rot + ROTATE_RATE * inp.pitch * dt).min(MAX_ROTATION);
         } else {
             p.rot = (p.rot - DEROTATE_RATE * dt).max(0.0);
@@ -118,26 +127,34 @@ impl Game {
         p.gear_pitch_vel += (-GEAR_PITCH_SPRING * (p.gear_pitch - pitch_target) - GEAR_PITCH_DAMPING * p.gear_pitch_vel) * dt;
         p.gear_pitch += p.gear_pitch_vel * dt;
         p.pos.y = wheels_down_height(p.rot.sin()) + p.gear;
-        let target = Q::look(Q::axis_angle(right, p.rot + p.gear_pitch).rotate(heading), UP);
-        // Ease toward the target attitude so touchdown roll/pitch never snaps.
-        p.q = p.q.nlerp(target, 1.0 - (-6.0 * dt).exp());
+        // The struts and the rotation move the origin up and down.
+        p.vel.y = (p.pos.y - y_before) / dt;
+        // The touchdown attitude eases out so roll and pitch never snap, while the rotation
+        // and the struts move the airframe directly: the nose never lags behind them.
+        p.settle = p.settle.nlerp(Q::IDENTITY, 1.0 - (-6.0 * dt).exp());
+        p.q = strut_attitude(heading, p.rot + p.gear_pitch).mul(p.settle).normalize();
         p.alpha = p.rot;
         p.beta = 0.0;
         p.mach = airspeed / speed_of_sound(p.pos.y);
+        p.omega = V3::default();
+        p.surf = V3::default();
 
-        if lift_g > 1.02 && p.rot > 0.0 {
-            // Lift off with a level velocity; the extra lift starts the climb smoothly.
-            p.q = target;
+        // Lift off once the wing carries the weight, the pilot is rotating and the struts
+        // have extended. Nothing jumps: the airframe keeps its attitude and height, the
+        // pitch rate of the rotation and the climb rate the extending struts gave it.
+        if lift_g > 1.02 && rotating && p.gear >= 0.0 {
             p.on_ground = false;
-            p.pos.y = wheels_down_height(p.rot.sin()) + p.gear.max(0.0) + 0.05;
+            p.omega = V3::new((p.rot + p.gear_pitch - pitch_before) / dt, 0.0, 0.0);
+            p.vel.y = p.vel.y.max(0.0);
+            // In the air `speed` is the airspeed.
+            p.speed = airspeed;
             p.rot = 0.0;
             p.gear = 0.0;
             p.gear_vel = 0.0;
             p.gear_pitch = 0.0;
             p.gear_pitch_vel = 0.0;
+            p.settle = Q::IDENTITY;
         }
-        p.omega = V3::default();
-        p.surf = V3::default();
         p.bump = bump;
         p.gload = 1.0;
         p.stall = false;
@@ -168,7 +185,9 @@ impl Game {
         if !self.player.alive {
             return;
         }
-        if self.player.pos.y <= wheels_down_height(self.player.fwd().y) {
+        // Only a descending aircraft touches down: right after liftoff the wheels may still
+        // sit level with the runway while the climb begins.
+        if self.player.vel.y < 0.0 && self.player.pos.y <= wheels_down_height(self.player.fwd().y) {
             let sink_rate = self.player.vel.y;
             self.touch_down(sink_rate);
         }
@@ -209,7 +228,11 @@ impl Game {
             self.event(event::GROUND_IMPACT, pos, 1.0);
             return;
         }
-        let hard = (-sink_rate - hard_sink).max(0.0) * HARD_LANDING_DAMAGE;
+        let mut hard = (-sink_rate - hard_sink).max(0.0) * HARD_LANDING_DAMAGE;
+        if !realism {
+            // Arcade: a landing within the limits is never what destroys the aircraft.
+            hard = hard.min(p.hp - 1.0).max(0.0);
+        }
         p.on_ground = true;
         // Keep the touchdown attitude; the ground roll eases the nose down and wings level.
         // The wheels roll where the nose points, so any crab angle is lost here.
@@ -218,6 +241,7 @@ impl Game {
         p.vel = p.heading.mul(p.speed);
         p.rot = clamp(fwd.y.asin(), 0.0, MAX_ROTATION);
         p.pos.y = wheels_down_height(p.rot.sin());
+        p.settle = strut_attitude(p.heading, p.rot).conj().mul(p.q).normalize();
         // The struts soak up the sink rate and rebound.
         p.gear = 0.0;
         p.gear_vel = sink_rate.min(0.0);

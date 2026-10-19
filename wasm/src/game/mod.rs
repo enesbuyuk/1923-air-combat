@@ -379,16 +379,25 @@ impl Game {
         let p = &self.player;
         let s = p.stats();
         let rearm_time = self.rearm_time();
+        let air = self.weather.air_at(p.pos.y);
+        // Rolling, `speed` is the ground speed; the gauge blends into the airspeed toward Vr
+        // so it reads the same airspeed the flight model shows once airborne.
+        let speed = if p.on_ground {
+            let airspeed = (p.speed - air.dot(p.heading)).max(0.0);
+            p.speed + (airspeed - p.speed) * clamp(p.speed / s.rotate_speed, 0.0, 1.0)
+        } else {
+            p.speed
+        };
         let o = &mut self.out_player;
         layout::put_v3(o, player::POS, p.pos);
         layout::put_quat(o, player::QUAT, p.q);
-        o[player::SPEED] = p.speed;
+        o[player::SPEED] = speed;
         o[player::THROTTLE] = p.throttle;
         o[player::ENGINE] = p.engine;
         o[player::ALPHA] = p.alpha;
         o[player::BETA] = p.beta;
         o[player::MACH] = p.mach;
-        layout::put_v3(o, player::WIND, self.weather.air_at(p.pos.y));
+        layout::put_v3(o, player::WIND, air);
         o[player::HP] = p.hp.max(0.0);
         o[player::MAX_HP] = s.hp;
         o[player::ALIVE] = flag(p.alive);

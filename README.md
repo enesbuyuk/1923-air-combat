@@ -159,15 +159,15 @@ Pick the mode in the menu or the pause screen.
 1. Cut throttle with `Ctrl`, open the airbrake with `B`.
 2. Slow to ~300-350 km/h and set up a shallow (~3°) glide; the nose sits ~10° above the flight path marker (that is the angle of attack). The engine needs a few seconds to spool, so add power early.
 3. In the last 25 m, ground effect softens the descent; raise the nose slightly with `S` (flare). In a crosswind the aircraft crabs into the wind; the wheels straighten it on touchdown.
-4. Landing gear deploys automatically when low and slow.
+4. Landing gear deploys automatically when low and slow. With the throttle back on the runway the lift dumpers keep the aircraft down, so holding the flare through touchdown does not bounce it back into the air.
 
-| Limit | Value |
+| Limit (Arcade) | Value |
 |---|---|
-| Vertical speed | < 18 m/s (above 8 m/s damages the airframe) |
-| Bank | < ~40° |
+| Vertical speed | < 22 m/s (above 10 m/s damages the airframe, but never destroys it) |
+| Bank | < ~45° |
 | Nose | < ~20° down |
 
-Harder landings or steep dives end in an explosion.
+Harder landings or steep dives end in an explosion. Buildings under the approach paths of both runways are kept below a 1:40 obstacle surface, so a normal glide clears them.
 
 ## 3D Models
 

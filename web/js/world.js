@@ -47,6 +47,37 @@ const APRONS = [
   [[-317, 74], [-365, 67], [-360, 18], [-347, -90], [-333, -100], [-300, -95], [-310, 70]],
   [[-337, 209], [-368, 207], [-373, 198], [-369, 136], [-366, 81], [-330, 85], [-322, 205]],
 ];
+// Obstacle limitation: past each runway end the approach surface starts APPROACH_START
+// out, climbs at APPROACH_SLOPE (1:40, well under a 3 degree glide) and fans out from
+// APPROACH_HALF_WIDTH at APPROACH_SPLAY per metre. Real buildings poking through it are cut
+// down to it, so a normal approach clears the roofs.
+const APPROACH_LENGTH = 3000;
+const APPROACH_START = 60;
+const APPROACH_SLOPE = 0.025;
+const APPROACH_HALF_WIDTH = 100;
+const APPROACH_SPLAY = 0.15;
+
+/** Highest roof (m) the approach surfaces allow over outline `pts`; Infinity outside them. */
+function approachCeiling(pts) {
+  let top = Infinity;
+  for (const { a, b } of RUNWAYS) {
+    const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    const ux = (b[0] - a[0]) / len;
+    const uz = (b[1] - a[1]) / len;
+    // Outward from each end: back past `a`, on past `b`.
+    for (const [ex, ez, out] of [[a[0], a[1], -1], [b[0], b[1], 1]]) {
+      for (const [x, z] of pts) {
+        const d = out * ((x - ex) * ux + (z - ez) * uz);
+        if (d < 0 || d > APPROACH_LENGTH) continue;
+        const side = Math.abs((x - ex) * uz - (z - ez) * ux);
+        if (side > APPROACH_HALF_WIDTH + APPROACH_SPLAY * d) continue;
+        top = Math.min(top, APPROACH_SLOPE * Math.max(0, d - APPROACH_START));
+      }
+    }
+  }
+  return top;
+}
+
 const HELIPADS = [[180, 136], [182, 73], [40, 80], [86, 37], [346, 260], [337, 221], [328, 183], [318, 145]];
 
 // ---------------------------------------------------------------------------
@@ -368,7 +399,7 @@ export function buildWorld(scene, renderer) {
   // Real OSM buildings near the airfield, generated city beyond them.
   const osm = new FootprintGrid();
   buildHangars(scene, osm);
-  const city = createCity(scene, loadBuildings(scene, osm));
+  const city = createCity(scene, loadBuildings(scene, osm, approachCeiling));
 
   // Light-space axes of the shadow camera (it looks from the sun along -sun with +y up),
   // for snapping the frustum to whole shadow-map texels.
@@ -406,9 +437,9 @@ export function buildWorld(scene, renderer) {
       dir.shadow.map?.dispose();
       dir.shadow.map = null;
     },
-    /** Sphere (x, y, z, r) against every building: null or { nx, nz, depth }. */
-    collide(x, y, z, r) {
-      return osm.hit(x, y, z, r) ?? city.collide(x, y, z, r);
+    /** Body (x, y, z, r, below) against every building: null or { nx, nz, depth }. */
+    collide(x, y, z, r, below = r) {
+      return osm.hit(x, y, z, r, below) ?? city.collide(x, y, z, r, below);
     },
   };
 }

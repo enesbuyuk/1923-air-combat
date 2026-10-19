@@ -247,8 +247,8 @@ export function createCity(scene, clearRadius = Promise.resolve(0), seed = (Math
 
   return {
     seed,
-    /** Sphere (x, y, z, r) against the generated buildings and trees; see hitFootprint. */
-    collide(x, y, z, r) {
+    /** Body (x, y, z, r, below) against the generated buildings and trees; see hitFootprint. */
+    collide(x, y, z, r, below = r) {
       if (!sets) return null;
       const pcx = Math.floor(x / CHUNK);
       const pcz = Math.floor(z / CHUNK);
@@ -258,7 +258,7 @@ export function createCity(scene, clearRadius = Promise.resolve(0), seed = (Math
             if (Math.abs(l.x - x) > 80 + r || Math.abs(l.z - z) > 80 + r) continue;
             if (l.x * l.x + l.z * l.z < clear2) continue;
             l.fp ??= lotFootprint(l);
-            const h = hitFootprint(l.fp, x, y, z, r);
+            const h = hitFootprint(l.fp, x, y, z, r, below);
             if (h) return h;
           }
         }
