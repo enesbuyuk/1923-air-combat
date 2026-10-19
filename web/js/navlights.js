@@ -12,7 +12,7 @@ import * as THREE from 'three';
 import { onTimeOfDay } from './atmosphere.js';
 
 /** Smallest on-screen size of a light, as a share of the view height. */
-const MIN_SCREEN = 0.01;
+const MIN_SCREEN = 0.012;
 /** Strobe cycle (s): two short flashes, then dark. */
 const STROBE_PERIOD = 1.2;
 /** Beacon cycle (s). */
@@ -22,29 +22,40 @@ let night = false;
 onTimeOfDay((on) => { night = on; });
 
 let glowTex = null;
+/**
+ * A small hot core and a faint wide halo, both falling off smoothly to zero at the edge.
+ * Lit far above white the core saturates into a crisp point while the halo stays soft;
+ * a flat-topped gradient would saturate into a hard-edged disc instead.
+ */
 function glowTexture() {
   if (!glowTex) {
+    const n = 128;
     const c = document.createElement('canvas');
-    c.width = c.height = 64;
+    c.width = c.height = n;
     const g = c.getContext('2d');
-    const r = g.createRadialGradient(32, 32, 0, 32, 32, 32);
-    r.addColorStop(0, 'rgba(255,255,255,1)');
-    r.addColorStop(0.15, 'rgba(255,255,255,0.8)');
-    r.addColorStop(0.4, 'rgba(255,255,255,0.15)');
-    r.addColorStop(1, 'rgba(255,255,255,0)');
-    g.fillStyle = r;
-    g.fillRect(0, 0, 64, 64);
+    const img = g.createImageData(n, n);
+    for (let j = 0; j < n; j++) {
+      for (let i = 0; i < n; i++) {
+        const r = Math.hypot(i + 0.5 - n / 2, j + 0.5 - n / 2) / (n / 2);
+        const edge = Math.max(0, 1 - r * r) ** 2;
+        const v = (Math.exp(-((r / 0.1) ** 2)) * 0.85 + Math.exp(-((r / 0.4) ** 2)) * 0.15) * edge;
+        const o = (j * n + i) * 4;
+        img.data[o] = img.data[o + 1] = img.data[o + 2] = 255;
+        img.data[o + 3] = Math.round(v * 255);
+      }
+    }
+    g.putImageData(img, 0, 0);
     glowTex = new THREE.CanvasTexture(c);
   }
   return glowTex;
 }
 
-const RED = new THREE.Color(60, 3, 1.5);
-const GREEN = new THREE.Color(0.8, 18, 4);
-const WHITE = new THREE.Color(16, 16, 14);
-const STROBE = new THREE.Color(40, 40, 46);
-const BEACON = new THREE.Color(60, 3.5, 1.5);
-const LANDING = new THREE.Color(40, 37, 32);
+const RED = new THREE.Color(10, 0.5, 0.25);
+const GREEN = new THREE.Color(0.4, 6, 1.4);
+const WHITE = new THREE.Color(5, 5, 4.6);
+const STROBE = new THREE.Color(24, 24, 27);
+const BEACON = new THREE.Color(10, 0.7, 0.3);
+const LANDING = new THREE.Color(18, 17, 15);
 
 const pos = new THREE.Vector3();
 const fwd = new THREE.Vector3();
@@ -113,14 +124,14 @@ export function createLights(group, wing, def) {
   root.visible = false;
   const [x, y, z] = wing.tip;
   const phase = Math.random() * 10;
-  sprite(root, RED, [-x, y, z], 0.9, phase);
-  sprite(root, GREEN, [x, y, z], 0.9, phase);
-  sprite(root, STROBE, [-x, y, z + 0.3], 1.6, phase, strobe);
-  sprite(root, STROBE, [x, y, z + 0.3], 1.6, phase, strobe);
-  sprite(root, WHITE, wing.tail, 0.8, phase);
-  sprite(root, BEACON, [0, wing.spine[1] + 0.1, wing.spine[2]], 1.1, phase * 1.7, beacon);
+  sprite(root, RED, [-x, y, z], 0.5, phase);
+  sprite(root, GREEN, [x, y, z], 0.5, phase);
+  sprite(root, STROBE, [-x, y, z + 0.3], 0.9, phase, strobe);
+  sprite(root, STROBE, [x, y, z + 0.3], 0.9, phase, strobe);
+  sprite(root, WHITE, wing.tail, 0.4, phase);
+  sprite(root, BEACON, [0, wing.spine[1] + 0.1, wing.spine[2]], 0.5, phase * 1.7, beacon);
   const nose = Math.min(wing.rootLE, 0) - def.length * 0.12;
-  const landing = sprite(root, LANDING, [0, y - 0.6, nose], 1.4, 0, null, true);
+  const landing = sprite(root, LANDING, [0, y - 0.6, nose], 0.9, 0, null, true);
   group.add(root);
   return { root, landing, tip: wing.tip, phase };
 }
@@ -140,8 +151,8 @@ export function updateLights(lights, gearDown) {
 export class PlayerLights {
   constructor(scene) {
     this.landing = new THREE.SpotLight(0xfff4e0, 0, 0, 0.42, 0.5, 2);
-    this.left = new THREE.PointLight(0xff2010, 0, 14, 2);
-    this.right = new THREE.PointLight(0x20ff50, 0, 14, 2);
+    this.left = new THREE.PointLight(0xff2010, 0, 5, 2);
+    this.right = new THREE.PointLight(0x30c058, 0, 5, 2);
     for (const l of [this.landing, this.left, this.right]) l.castShadow = false;
     scene.add(this.landing, this.landing.target, this.left, this.right);
   }
@@ -153,11 +164,11 @@ export class PlayerLights {
   update(group, lights, gearDown, alive) {
     const on = night && alive;
     const l = this.landing;
-    l.intensity = on && gearDown ? 150000 : 0;
+    l.intensity = on && gearDown ? 80000 : 0;
     const flash = on ? strobe(performance.now() / 1000 + lights.phase) : 0;
-    this.left.intensity = this.right.intensity = on ? 30 + flash * 250 : 0;
+    this.left.intensity = this.right.intensity = on ? 2 + flash * 60 : 0;
     this.left.color.set(flash ? 0xffffff : 0xff2010);
-    this.right.color.set(flash ? 0xffffff : 0x20ff50);
+    this.right.color.set(flash ? 0xffffff : 0x30c058);
     if (!on) return;
     group.updateMatrixWorld();
     const [x, y, z] = lights.tip;
