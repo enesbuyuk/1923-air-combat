@@ -2,7 +2,9 @@
 # Values already set in the environment (e.g. CI build variables) take precedence.
 
 if [[ -f .env ]]; then
-  while IFS='=' read -r key value; do
+  # `|| -n $key` keeps a last line that has no trailing newline.
+  while IFS='=' read -r key value || [[ -n "$key" ]]; do
+    value="${value%$'\r'}"
     [[ -z "$key" || "$key" == \#* ]] && continue
     [[ -z "${!key:-}" ]] && export "$key=$value"
   done < .env
