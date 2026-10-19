@@ -176,6 +176,7 @@ export class CameraRig {
   }
 
   lookFrom(x, y, z, target) {
+    y = Math.max(y, (this.terrainHeight?.(x, z) ?? 0) + 0.8);
     this.camera.up.set(0, 1, 0);
     this.camera.position.set(x, y, z);
     this.camera.lookAt(target);
@@ -237,6 +238,7 @@ export class CameraRig {
     if (this.chaseOffset.lengthSq() === 0) this.chaseOffset.copy(back);
     else this.chaseOffset.lerp(back, k);
     c.position.copy(pos).add(this.chaseOffset);
+    c.position.y = Math.max(c.position.y, (this.terrainHeight?.(c.position.x, c.position.z) ?? 0) + 0.8);
     c.up.lerp(up, k).normalize();
     // Ahead of the nose normally; at the aircraft itself while orbiting with free look.
     c.lookAt(pos.addScaledVector(fwd, def.length * Math.max(0, Math.cos(this.lookYaw)) ** 4));

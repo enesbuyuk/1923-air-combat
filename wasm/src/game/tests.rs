@@ -6,10 +6,10 @@ use crate::entities::{Bot, Input, Owner, Tactic, Track};
 use crate::layout::MAX_GROUND;
 use crate::math::{Q, V3, UP};
 
-const F16: usize = 0;
-const DT: f32 = 1.0 / 60.0;
+pub(super) const F16: usize = 0;
+pub(super) const DT: f32 = 1.0 / 60.0;
 
-fn run(g: &mut Game, seconds: f32, input: Input) {
+pub(super) fn run(g: &mut Game, seconds: f32, input: Input) {
     g.input = input;
     for _ in 0..(seconds / DT) as usize {
         g.step(DT);
@@ -17,18 +17,23 @@ fn run(g: &mut Game, seconds: f32, input: Input) {
 }
 
 /// Calm air so the numbers are reproducible.
-fn calm(ty: usize) -> Game {
+pub(super) fn calm(ty: usize) -> Game {
     let mut g = Game::new(ty, 7);
     g.weather.wind = V3::default();
+    g.environment.flat = true;
     g.wave_timer = 1e9;
     g
 }
 
 /// Level flight heading north at `speed`, height `h`, engine already at `throttle`.
-fn airborne(ty: usize, h: f32, speed: f32, throttle: f32) -> Game {
+pub(super) fn airborne(ty: usize, h: f32, speed: f32, throttle: f32) -> Game {
     let mut g = calm(ty);
     let p = &mut g.player;
     p.on_ground = false;
+    p.gear_position = 0.0;
+    p.gear_down = false;
+    p.flaps = 0.0;
+    p.flap_command = 0.0;
     // South of the base, flying north: plenty of room before the world limit.
     p.pos = V3::new(0.0, h, 13000.0);
     p.q = Q::look(V3::new(0.0, 0.0, -1.0), UP);
@@ -39,7 +44,15 @@ fn airborne(ty: usize, h: f32, speed: f32, throttle: f32) -> Game {
     g
 }
 
-fn throttle(t: f32) -> Input {
+/// A configured approach over the flat test runway.
+pub(super) fn approach(ty: usize, h: f32, speed: f32, throttle: f32) -> Game {
+    let mut g = airborne(ty, h, speed, throttle);
+    g.player.gear_position = 1.0;
+    g.player.gear_down = true;
+    g
+}
+
+pub(super) fn throttle(t: f32) -> Input {
     Input { throttle: t, ..Input::default() }
 }
 
@@ -131,14 +144,14 @@ fn slow_flight_stalls_and_the_nose_drops() {
 #[test]
 fn shallow_approach_lands_safely() {
     // 3 degree glide at ~85 m/s from 60 m, near idle (no gear or flap drag is modelled).
-    let mut g = airborne(F16, 60.0, 85.0, 0.05);
+    let mut g = approach(F16, 60.0, 85.0, 0.05);
     let path = V3::new(0.0, -0.052, -1.0).norm();
     g.player.vel = path.mul(85.0);
     g.player.q = Q::look(V3::new(0.0, 0.1, -1.0).norm(), UP);
     let mut t = 0.0;
     while !g.player.on_ground && g.player.alive && t < 60.0 {
-        // Flare in the last few metres.
-        let pitch = if g.player.pos.y < 6.0 { 0.3 } else { 0.0 };
+        // Begin the flare early enough to arrest the sink before wheel contact.
+        let pitch = if g.player.pos.y < 15.0 { 0.3 } else { 0.0 };
         run(&mut g, DT, Input { throttle: 0.05, pitch, ..Input::default() });
         t += DT;
     }
@@ -237,7 +250,7 @@ fn ground_crew_rearms_after_stopping_in_a_hangar() {
     assert!(in_hangar(h.x, h.z));
     run(&mut g, REARM_TIME + 1.0, throttle(0.0));
     let p = &g.player;
-    assert_eq!(p.ammo, PLAYER_AMMO);
+    assert_eq!(p.ammo, STATS[F16].rounds);
     assert_eq!(p.missiles, STATS[F16].missiles);
     assert_eq!(p.flares, STATS[F16].flares);
     assert!(p.fuel > 0.99 && p.engine_health == 1.0);
@@ -282,7 +295,7 @@ fn combat_hits_damage_aircraft_systems() {
 // Bots fly the real flight model
 // ---------------------------------------------------------------------------
 
-fn enemy(g: &mut Game, slot: usize, ty: usize, pos: V3, fwd: V3, speed: f32) {
+pub(super) fn enemy(g: &mut Game, slot: usize, ty: usize, pos: V3, fwd: V3, speed: f32) {
     g.bots[slot] = Bot::spawn(ty, pos, fwd, speed, 1e6);
 }
 
@@ -418,7 +431,7 @@ fn an_enemy_missile_hits_a_player_who_does_nothing() {
     g0.launch_missile(from, V3::new(0.0, 0.0, -250.0), Track::Player, Owner::Bot);
     let hp = g0.player.hp;
     run(&mut g0, 15.0, throttle(0.7));
-    assert!(g0.player.hp < hp, "enemy missile missed a straight-flying player");
+    assert!(g0.deaths > 0.0 || g0.player.hp < hp, "enemy missile missed a straight-flying player");
 }
 
 #[test]
@@ -593,7 +606,7 @@ fn ground_effect_adds_lift_within_a_wingspan() {
 
 #[test]
 fn touchdown_compresses_the_gear_and_it_settles() {
-    let mut g = airborne(F16, GEAR_HEIGHT + 0.5, 75.0, 0.0);
+    let mut g = approach(F16, GEAR_HEIGHT + 0.5, 75.0, 0.0);
     g.player.vel = V3::new(0.0, -2.5, -75.0);
     g.player.q = Q::look(V3::new(0.0, 0.05, -1.0).norm(), UP);
     let mut t = 0.0;
@@ -706,7 +719,7 @@ fn overspeed_damages_the_airframe() {
 
 
 // ---------------------------------------------------------------------------
-// Performance envelope, guns, collisions and the Simulator realism setting
+// Performance envelope, guns, collisions and simulator rules
 // ---------------------------------------------------------------------------
 
 /// Level full-power speed (Mach) at height `h`, with the height pinned.
@@ -714,6 +727,9 @@ fn level_mach(ty: usize, h: f32) -> f32 {
     let mut g = airborne(ty, h, STATS[ty].max_speed * 0.8, 1.0);
     for _ in 0..(240.0 / DT) as usize {
         g.player.fuel = 0.5;
+        // A stationary test stand: keep the speed check inside the mission area.
+        g.player.pos.x = 0.0;
+        g.player.pos.z = 0.0;
         g.player.pos.y = h;
         g.player.vel.y = 0.0;
         run(&mut g, DT, throttle(1.0));
@@ -777,7 +793,6 @@ fn a_midair_collision_destroys_both_aircraft() {
 #[test]
 fn simulator_loads_real_ammunition_and_disarms_the_bomber() {
     let mut g = calm(F16);
-    g.set_realism(true);
     assert_eq!(g.player.ammo, STATS[F16].rounds);
     g.input = Input { gun: true, ..Input::default() };
     g.player.on_ground = false;
@@ -785,46 +800,45 @@ fn simulator_loads_real_ammunition_and_disarms_the_bomber() {
     g.player.gun_cd = 0.0;
     g.update_player(DT);
     assert_eq!(g.player.ammo, STATS[F16].rounds - ROUNDS_PER_SHOT);
-    let mut b2 = calm(B2);
-    b2.set_realism(true);
+    let b2 = calm(B2);
     assert_eq!((b2.player.ammo, b2.player.missiles), (0.0, 0.0));
-    b2.set_realism(false);
-    assert!(b2.player.ammo > 0.0 && b2.player.missiles > 0.0);
 }
 
 #[test]
 fn simulator_has_no_aim_assist() {
     let mut g = airborne(F16, 2000.0, 250.0, 0.8);
-    // A target 5 degrees off the nose: arcade bends the shot onto it, simulator does not.
+    let mut clear = airborne(F16, 2000.0, 250.0, 0.8);
+    // A target 5 degrees off the nose must not change a fired round's velocity.
     let off = V3::new(0.087, 0.0, -1.0).norm().mul(800.0);
     let at = g.player.pos.add(off);
     enemy(&mut g, 0, F16, at, V3::new(0.0, 0.0, -1.0), 250.0);
-    let fwd = g.player.fwd();
-    let (muzzle, pvel) = (g.player.pos, g.player.vel);
-    assert!(g.gun_assist_dir(muzzle, fwd, pvel).dot(fwd) < 0.9999);
-    g.realism = true;
-    assert_eq!(g.gun_assist_dir(muzzle, fwd, pvel).dot(fwd), 1.0);
+    for game in [&mut g, &mut clear] {
+        game.input = Input { throttle: 0.8, gun: true, ..Input::default() };
+        game.update_player(DT);
+    }
+    let shot = g.bullets.iter().find(|b| b.life > 0.0).expect("no shot fired");
+    let unaimed = clear.bullets.iter().find(|b| b.life > 0.0).unwrap();
+    assert!(shot.vel.sub(unaimed.vel).len() < 1e-5, "target bent the shot");
+    let dir = shot.vel.sub(g.player.vel).norm();
+    assert!(dir.dot(g.player.fwd()) >= GUN_DISPERSION.cos() - 1e-6);
 }
 
 #[test]
 fn simulator_does_not_turn_the_aircraft_back_and_loses_it_outside() {
     let mut g = airborne(F16, 3000.0, 250.0, 0.8);
-    g.realism = true;
     g.player.pos = V3::new(0.0, 3000.0, WORLD_LIMIT + 200.0);
     g.player.q = Q::look(V3::new(0.0, 0.0, 1.0), UP);
     g.player.vel = V3::new(0.0, 0.0, 250.0);
     run(&mut g, 5.0, throttle(0.8));
     assert!(g.player.vel.norm().z > 0.99, "turned back by magic");
-    run(&mut g, SIM_OUT_OF_BOUNDS_TIME, throttle(0.8));
+    run(&mut g, OUT_OF_BOUNDS_TIME - 4.0, throttle(0.8));
     assert!(!g.player.alive || g.player.respawn > 0.0, "still flying outside");
 }
 
 #[test]
 fn simulator_landing_limits_are_strict() {
-    // A 5 m/s sink: fine in arcade, a damaging hard landing in the simulator.
-    let land = |realism: bool, sink: f32| {
-        let mut g = airborne(F16, 1.0, 75.0, 0.05);
-        g.realism = realism;
+    let land = |sink: f32| {
+        let mut g = approach(F16, 1.0, 75.0, 0.05);
         g.player.vel = V3::new(0.0, -sink, -75.0);
         g.player.pos.y = super::flight::wheels_down_height(0.0) + 0.01;
         g.player.q = Q::look(V3::new(0.0, 0.08, -1.0).norm(), UP);
@@ -832,11 +846,132 @@ fn simulator_landing_limits_are_strict() {
         (g.player.alive, g.player.hp)
     };
     let full = STATS[F16].hp;
-    assert_eq!(land(false, 5.0), (true, full));
-    let (alive, hp) = land(true, 5.0);
+    assert_eq!(land(2.0), (true, full));
+    let (alive, hp) = land(5.0);
     assert!(alive && hp < full, "no damage at 5 m/s in the simulator");
-    assert!(!land(true, 7.0).0, "7 m/s survived in the simulator");
-    assert!(land(false, 7.0).0);
+    assert!(!land(7.0).0, "7 m/s survived in the simulator");
+}
+
+#[test]
+fn cannon_hits_use_the_aircraft_radius_without_an_extra_margin() {
+    let mut g = airborne(F16, 2000.0, 250.0, 0.8);
+    let at = V3::new(0.0, 2000.0, 0.0);
+    enemy(&mut g, 0, F16, at, V3::new(0.0, 0.0, -1.0), 250.0);
+    let hp = g.bots[0].hp;
+    let vel = V3::new(0.0, 0.0, -1200.0);
+    g.spawn_bullet(at.add(V3::new(STATS[F16].radius * 1.5, 0.0, 10.0)), vel, Owner::Player);
+    g.update_bullets(DT);
+    assert_eq!(g.bots[0].hp, hp, "a near miss hit the enlarged hull");
+    g.spawn_bullet(at.add(V3::new(0.0, 0.0, 10.0)), vel, Owner::Player);
+    g.update_bullets(DT);
+    assert_eq!(g.bots[0].hp, hp - BULLET_DAMAGE, "a direct hit missed");
+}
+
+#[test]
+fn the_last_cannon_round_never_makes_ammunition_negative() {
+    let mut g = airborne(F16, 2000.0, 250.0, 0.8);
+    g.player.ammo = 1.0;
+    g.input = Input { throttle: 0.8, gun: true, ..Input::default() };
+    g.update_player(DT);
+    assert_eq!(g.player.ammo, 0.0);
+    assert_eq!(g.bullets.iter().filter(|b| b.life > 0.0).count(), 1);
+    g.player.gun_cd = 0.0;
+    g.update_player(DT);
+    assert_eq!(g.bullets.iter().filter(|b| b.life > 0.0).count(), 1, "fired with an empty gun");
+}
+
+#[test]
+fn returning_inside_the_mission_area_clears_the_countdown() {
+    let mut g = airborne(F16, 3000.0, 250.0, 0.8);
+    g.player.pos.z = WORLD_LIMIT + 1000.0;
+    run(&mut g, 1.0, throttle(0.8));
+    assert!(g.player.outside > 0.0);
+    assert!(g.out_player[crate::layout::player::LOST_IN] > 0.0);
+    g.player.pos.z = WORLD_LIMIT - 1000.0;
+    run(&mut g, DT, throttle(0.8));
+    assert_eq!(g.player.outside, 0.0);
+    assert_eq!(g.out_player[crate::layout::player::LOST_IN], -1.0);
+    assert!(g.player.alive);
+}
+
+#[test]
+fn ground_crew_waits_the_full_service_time() {
+    let mut g = needs_service();
+    let h = &HANGARS[3];
+    g.player.pos = V3::new(h.x, GEAR_HEIGHT, h.z);
+    run(&mut g, REARM_TIME - 1.0, throttle(0.0));
+    assert_eq!(g.player.ammo, 0.0, "service finished early");
+    assert!(g.player.engine_health < 1.0);
+    run(&mut g, 2.0, throttle(0.0));
+    assert_eq!(g.player.ammo, STATS[F16].rounds);
+    assert_eq!(g.player.engine_health, 1.0);
+}
+
+#[test]
+fn respawn_restores_only_the_aircraft_weapon_load() {
+    for (ty, stats) in STATS.iter().enumerate() {
+        let mut g = calm(ty);
+        let at = g.player.pos;
+        g.kill_player(at);
+        run(&mut g, RESPAWN_TIME + 0.1, Input::default());
+        assert!(g.player.alive && g.player.on_ground);
+        assert_eq!(g.player.ammo, stats.rounds);
+        assert_eq!(g.player.missiles, stats.missiles);
+    }
+}
+
+#[test]
+fn the_bomber_cannot_lock_or_fire_air_to_air_weapons() {
+    let mut g = airborne(B2, 2000.0, 170.0, 0.8);
+    let at = g.player.pos.add(V3::new(0.0, 0.0, -600.0));
+    enemy(&mut g, 0, F16, at, V3::new(0.0, 0.0, -1.0), 200.0);
+    g.input = Input { throttle: 0.8, gun: true, missile: true, ..Input::default() };
+    for _ in 0..120 {
+        g.update_player(DT);
+    }
+    assert!(g.lock == Track::None);
+    assert_eq!(g.lock_progress, 0.0);
+    assert!(g.bullets.iter().all(|b| b.life <= 0.0));
+    assert!(g.missiles.iter().all(|m| m.life <= 0.0));
+}
+
+#[test]
+fn bomber_bots_have_no_tail_gun() {
+    for side in [-1.0, 1.0] {
+        let mut g = airborne(F16, 2000.0, 200.0, 0.8);
+        let at = g.player.pos.add(V3::new(0.0, 0.0, side * 500.0));
+        enemy(&mut g, 0, B2, at, V3::new(0.0, 0.0, -1.0), 170.0);
+        for _ in 0..60 {
+            g.update_bots(DT);
+        }
+        assert!(g.bullets.iter().all(|b| b.life <= 0.0), "bomber fired a gun");
+        assert_eq!(g.bots[0].missiles, 0.0);
+    }
+}
+
+#[test]
+fn missile_warheads_do_not_weaken_with_difficulty() {
+    for difficulty in 0..DIFFICULTY.len() {
+        let mut g = airborne(F16, 2000.0, 250.0, 0.8);
+        g.difficulty = difficulty;
+        g.launch_missile(g.player.pos, g.player.vel, Track::Player, Owner::Bot);
+        g.update_missiles(DT);
+        assert!(!g.player.alive, "direct missile hit survived on difficulty {difficulty}");
+    }
+}
+
+#[test]
+fn excessive_bank_or_ground_speed_makes_touchdown_fatal() {
+    for (bank, speed) in [(0.5, 80.0), (0.0, 125.0)] {
+        let mut g = approach(F16, GEAR_HEIGHT, speed, 0.0);
+        g.player.q = Q::axis_angle(V3::new(0.0, 0.0, 1.0), bank);
+        g.player.vel = V3::new(0.0, -1.0, -speed);
+        // A tailwind can lower airspeed, but cannot lower wheel speed on the runway.
+        g.weather.wind = V3::new(0.0, 0.0, -30.0);
+        g.player.speed = speed - 30.0;
+        g.update_player(DT);
+        assert!(!g.player.alive, "touchdown survived at bank {bank}, ground speed {speed}");
+    }
 }
 
 
@@ -946,7 +1081,7 @@ fn liftoff_is_seamless() {
 #[test]
 fn holding_the_flare_through_touchdown_does_not_bounce() {
     // Stick held back at touchdown, throttle idle: the lift dumpers keep it on the runway.
-    let mut g = airborne(F16, GEAR_HEIGHT + 1.0, 95.0, 0.0);
+    let mut g = approach(F16, GEAR_HEIGHT + 1.0, 95.0, 0.0);
     g.player.vel = V3::new(0.0, -2.0, -95.0);
     g.player.q = Q::look(V3::new(0.0, 0.15, -1.0).norm(), UP);
     let mut touched = false;
@@ -960,14 +1095,13 @@ fn holding_the_flare_through_touchdown_does_not_bounce() {
 }
 
 #[test]
-fn an_arcade_hard_landing_does_not_destroy_a_damaged_aircraft() {
-    let mut g = airborne(F16, GEAR_HEIGHT + 0.5, 90.0, 0.0);
-    g.player.hp = 10.0;
-    g.player.vel = V3::new(0.0, -(MAX_SINK_RATE - 1.0), -90.0);
+fn a_hard_landing_can_destroy_a_damaged_aircraft() {
+    let mut g = approach(F16, GEAR_HEIGHT + 0.5, 90.0, 0.0);
+    g.player.hp = 4.0;
+    g.player.vel = V3::new(0.0, -5.5, -90.0);
     g.player.q = Q::look(V3::new(0.0, 0.05, -1.0).norm(), UP);
     run(&mut g, 0.5, throttle(0.0));
-    assert!(g.player.on_ground && g.player.alive, "destroyed by a landing inside the limits");
-    assert!(g.player.hp < 10.0, "no hard landing damage");
+    assert!(!g.player.alive, "landing damage was artificially capped");
 }
 
 #[test]

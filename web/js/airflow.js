@@ -3,6 +3,7 @@
 // camera wobble and the wind sound.
 
 import * as THREE from 'three';
+import { onTimeOfDay } from './atmosphere.js';
 
 const STREAKS = 140;
 /** Streaks live in a sphere of this radius (m) around the camera. */
@@ -44,6 +45,8 @@ export class Airflow {
     this.lines = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({
       vertexColors: true, transparent: true, opacity: 0, depthWrite: false,
     }));
+    // The streaks are moisture lit by the sun: barely there at night.
+    onTimeOfDay((night) => this.lines.material.color.set(night ? 0x1a1e26 : 0xffffff));
     this.lines.frustumCulled = false;
     this.lines.visible = false;
     scene.add(this.lines);
@@ -100,7 +103,7 @@ export class Airflow {
 
     const speed = p.onGround ? p.speed * 0.4 : p.speed;
     const fast = THREE.MathUtils.smoothstep(speed, 60, 380);
-    const lowLevel = 1 - THREE.MathUtils.smoothstep(p.y, 80, 600);
+    const lowLevel = 1 - THREE.MathUtils.smoothstep(p.agl, 80, 600);
     const highAlpha = p.onGround ? 0 : THREE.MathUtils.smoothstep(Math.abs(p.alpha), 0.2, 0.45);
     const transonic = Math.max(0, 1 - Math.abs(p.mach - 1) / 0.08);
     const target = Math.min(1,

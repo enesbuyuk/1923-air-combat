@@ -38,10 +38,8 @@ pub struct Stats {
     /// Afterburning engine: thrust above AFTERBURNER_DETENT gains ram air with Mach, and
     /// fuel flow steps up.
     pub afterburner: bool,
-    /// Cannon rounds carried (Simulator); 0 for an aircraft without a gun.
+    /// Cannon rounds carried; 0 for an aircraft without a gun.
     pub rounds: f32,
-    /// Carries air-to-air missiles (Simulator); the B-2 does not.
-    pub air_to_air: bool,
     /// Moments of inertia about the body pitch, yaw and roll axes, relative to pitch. Their
     /// ratios set the gyroscopic (inertia) coupling between the axes.
     pub inertia: V3,
@@ -55,35 +53,43 @@ const INERTIA_FLYING_WING: V3 = V3::new(1.0, 2.5, 1.5);
 /// 0 = F-16, 1 = F-22 Raptor, 2 = B-2 Spirit, 3 = KAAN.
 /// `max_speed` is the sea-level top speed at full throttle; thinner air up high allows more.
 pub const STATS: [Stats; 4] = [
-    Stats { max_speed: 400.0, thrust: 11.0, pitch_rate: 1.0, roll_rate: 3.5, yaw_rate: 0.45, hp: 100.0, missiles: 6.0, gun_interval: 0.05, rotate_speed: 72.0, stall_speed: 55.0, radius: 9.0, span: 9.96, g_limit: 9.0, alpha_max: 0.44, spool: 1.0, endurance: 480.0, flares: 30.0, afterburner: true, rounds: 511.0, air_to_air: true, inertia: INERTIA_FIGHTER },
-    Stats { max_speed: 450.0, thrust: 12.0, pitch_rate: 1.15, roll_rate: 3.3, yaw_rate: 0.55, hp: 120.0, missiles: 8.0, gun_interval: 0.05, rotate_speed: 75.0, stall_speed: 48.0, radius: 10.0, span: 13.6, g_limit: 9.0, alpha_max: 0.52, spool: 1.1, endurance: 540.0, flares: 30.0, afterburner: true, rounds: 480.0, air_to_air: true, inertia: INERTIA_FIGHTER },
-    Stats { max_speed: 260.0, thrust: 4.0, pitch_rate: 0.5, roll_rate: 0.9, yaw_rate: 0.25, hp: 320.0, missiles: 16.0, gun_interval: 0.10, rotate_speed: 80.0, stall_speed: 60.0, radius: 22.0, span: 52.4, g_limit: 2.5, alpha_max: 0.30, spool: 0.6, endurance: 12000.0, flares: 60.0, afterburner: false, rounds: 0.0, air_to_air: false, inertia: INERTIA_FLYING_WING },
-    Stats { max_speed: 430.0, thrust: 10.5, pitch_rate: 1.1, roll_rate: 3.3, yaw_rate: 0.50, hp: 115.0, missiles: 8.0, gun_interval: 0.05, rotate_speed: 74.0, stall_speed: 50.0, radius: 10.0, span: 14.0, g_limit: 9.0, alpha_max: 0.48, spool: 1.0, endurance: 540.0, flares: 30.0, afterburner: true, rounds: 450.0, air_to_air: true, inertia: INERTIA_FIGHTER },
+    Stats { max_speed: 400.0, thrust: 11.0, pitch_rate: 1.0, roll_rate: 3.5, yaw_rate: 0.45, hp: 100.0, missiles: 6.0, gun_interval: 0.05, rotate_speed: 72.0, stall_speed: 55.0, radius: 9.0, span: 9.96, g_limit: 9.0, alpha_max: 0.44, spool: 1.0, endurance: 480.0, flares: 30.0, afterburner: true, rounds: 511.0, inertia: INERTIA_FIGHTER },
+    Stats { max_speed: 450.0, thrust: 12.0, pitch_rate: 1.15, roll_rate: 3.3, yaw_rate: 0.55, hp: 120.0, missiles: 8.0, gun_interval: 0.05, rotate_speed: 75.0, stall_speed: 48.0, radius: 10.0, span: 13.6, g_limit: 9.0, alpha_max: 0.52, spool: 1.1, endurance: 540.0, flares: 30.0, afterburner: true, rounds: 480.0, inertia: INERTIA_FIGHTER },
+    Stats { max_speed: 260.0, thrust: 4.0, pitch_rate: 0.5, roll_rate: 0.9, yaw_rate: 0.25, hp: 320.0, missiles: 0.0, gun_interval: 0.10, rotate_speed: 80.0, stall_speed: 60.0, radius: 22.0, span: 52.4, g_limit: 2.5, alpha_max: 0.30, spool: 0.6, endurance: 12000.0, flares: 60.0, afterburner: false, rounds: 0.0, inertia: INERTIA_FLYING_WING },
+    Stats { max_speed: 430.0, thrust: 10.5, pitch_rate: 1.1, roll_rate: 3.3, yaw_rate: 0.50, hp: 115.0, missiles: 8.0, gun_interval: 0.05, rotate_speed: 74.0, stall_speed: 50.0, radius: 10.0, span: 14.0, g_limit: 9.0, alpha_max: 0.48, spool: 1.0, endurance: 540.0, flares: 30.0, afterburner: true, rounds: 450.0, inertia: INERTIA_FIGHTER },
 ];
 
 /// Fighter types an enemy wave draws from (the B-2 is added separately).
 pub const BOT_FIGHTERS: [usize; 3] = [0, 1, 3];
 
 // ---------------------------------------------------------------------------
-// Difficulty (0 easy, 1 medium, 2 hard). Medium is the original tuning.
+// Difficulty (0 easy, 1 medium, 2 hard). Hard uses the full pilot tuning; only pilot
+// behaviour changes, never aircraft, stores or weapon damage.
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy)]
 pub struct Difficulty {
-    /// Multiplies the wave-based skill: turn rate, fire rate and aim spread.
+    /// Multiplies the wave-based pilot skill (decisions and commanded manoeuvres).
     pub skill: f32,
-    pub hp: f32,
-    /// Hull damage per enemy cannon round.
-    pub damage: f32,
     pub gun_range: f32,
     /// Cosine of the cone the player must be in before a bot opens fire.
     pub aim_cone: f32,
+    /// Extra aiming error (rad) on top of the gun dispersion: worse pilots spray.
+    pub aim_error: f32,
+    /// Seconds a bot must hold the quarry in its seeker cone before it can launch.
+    pub lock_time: f32,
+    /// Minimum gap (s) between two missile launches of the same bot.
+    pub missile_interval: f32,
+    /// Longest distance (m) at which a bot takes a missile shot.
+    pub missile_range: f32,
+    /// Scales the number of enemies in each wave.
+    pub wave_scale: f32,
 }
 
 pub const DIFFICULTY: [Difficulty; 3] = [
-    Difficulty { skill: 0.65, hp: 0.75, damage: 2.0, gun_range: 1000.0, aim_cone: 0.992 },
-    Difficulty { skill: 1.0, hp: 1.0, damage: 3.5, gun_range: 1300.0, aim_cone: 0.985 },
-    Difficulty { skill: 1.35, hp: 1.35, damage: 5.0, gun_range: 1600.0, aim_cone: 0.975 },
+    Difficulty { skill: 0.5, gun_range: 700.0, aim_cone: 0.996, aim_error: 0.02, lock_time: 3.0, missile_interval: 30.0, missile_range: 2500.0, wave_scale: 0.5 },
+    Difficulty { skill: 0.85, gun_range: 1100.0, aim_cone: 0.99, aim_error: 0.008, lock_time: 1.5, missile_interval: 15.0, missile_range: 3300.0, wave_scale: 0.75 },
+    Difficulty { skill: 1.35, gun_range: 1600.0, aim_cone: 0.975, aim_error: 0.0, lock_time: LOCK_TIME, missile_interval: BOT_MISSILE_INTERVAL, missile_range: BOT_MISSILE_MAX_RANGE, wave_scale: 1.0 },
 ];
 pub const DEFAULT_DIFFICULTY: usize = 1;
 
@@ -94,6 +100,14 @@ pub const DEFAULT_DIFFICULTY: usize = 1;
 pub const GRAVITY: f32 = 9.81;
 /// Height of the aircraft origin above the ground while on its wheels.
 pub const GEAR_HEIGHT: f32 = 2.2;
+pub const GEAR_TRANSIT: f32 = 3.0;
+pub const FLAP_TRANSIT: f32 = 2.0;
+pub const GEAR_SPEED_LIMIT: f32 = 155.0;
+pub const FLAP_SPEED_LIMIT: f32 = 105.0;
+pub const GEAR_DRAG: f32 = 2.5e-5;
+pub const FLAP_DRAG: f32 = 8e-5;
+pub const FLAP_LIFT_GAIN: f32 = 0.35;
+pub const FLAP_CAMBER: f32 = 0.18;
 /// Takeoff rotation: nose comes up at ROTATE_RATE (rad/s) up to MAX_ROTATION (tail strike
 /// angle); the aircraft lifts off once the wing makes more than its weight in lift.
 pub const ROTATE_RATE: f32 = 0.12;
@@ -232,14 +246,15 @@ pub const TURBULENCE_HEIGHT: f32 = 500.0;
 pub const SUBSTEPS: u32 = 2;
 pub const MAX_STEP: f32 = 0.05;
 
-// Touchdown limits (Arcade): steeper, faster or more banked than this is a crash. A
-// landing within them damages the hull but never destroys the aircraft.
-pub const MAX_SINK_RATE: f32 = 22.0;
+// Touchdown limits: steeper, faster or more banked than this is a crash.
+pub const MAX_SINK_RATE: f32 = 6.0;
 /// Sink rate (m/s) above which a landing damages the hull, and the damage per m/s beyond.
-pub const HARD_LANDING_SINK: f32 = 10.0;
+pub const HARD_LANDING_SINK: f32 = 3.0;
 pub const HARD_LANDING_DAMAGE: f32 = 4.0;
-/// Minimum up-vector y (~45 deg of bank).
-pub const MIN_LANDING_UP: f32 = 0.7;
+/// Minimum up-vector y (~20 deg of bank).
+pub const MIN_LANDING_UP: f32 = 0.94;
+/// Maximum touchdown ground speed, as a share of the nominal 1 G stall speed.
+pub const MAX_TOUCHDOWN: f32 = 2.0;
 /// Minimum forward-vector y (~20 deg nose down).
 pub const MIN_LANDING_NOSE: f32 = -0.35;
 
@@ -254,8 +269,10 @@ pub const RUNWAY_LENGTH: f32 = 1415.0;
 pub const RUNWAY_WIDTH: f32 = 30.0;
 /// Distance from the runway threshold to the spawn point.
 pub const RUNWAY_SPAWN_INSET: f32 = 60.0;
-/// Horizontal radius beyond which the player is steered back toward base.
+/// Horizontal radius of the mission area; the pilot must turn back manually.
 pub const WORLD_LIMIT: f32 = 14000.0;
+/// Seconds outside WORLD_LIMIT before the aircraft is lost.
+pub const OUT_OF_BOUNDS_TIME: f32 = 30.0;
 /// Above this speed (m/s) hitting a building is fatal; below it the aircraft just scrapes.
 pub const BUILDING_CRASH_SPEED: f32 = 40.0;
 
@@ -268,8 +285,7 @@ pub fn runway_dir() -> V3 {
 // Weapons and scoring
 // ---------------------------------------------------------------------------
 
-pub const PLAYER_AMMO: f32 = 1200.0;
-/// Simulator: each simulated cannon shot stands for this many real rounds (6000 rpm M61).
+/// Each simulated cannon shot stands for this many rounds (6000 rpm M61).
 pub const ROUNDS_PER_SHOT: f32 = 5.0;
 /// M61 Vulcan 20 mm muzzle velocity (m/s).
 pub const PLAYER_BULLET_SPEED: f32 = 1050.0;
@@ -282,9 +298,6 @@ pub const GUN_DISPERSION: f32 = 0.004;
 pub const MIDAIR_RADIUS: f32 = 0.6;
 pub const BULLET_LIFE: f32 = 1.6;
 pub const BULLET_DAMAGE: f32 = 9.0;
-/// Half-angle (deg) of the cone in which cannon aim assist engages.
-pub const GUN_ASSIST_CONE_DEG: f32 = 10.0;
-pub const GUN_ASSIST_RANGE: f32 = 1600.0;
 
 pub const MISSILE_INTERVAL: f32 = 0.6;
 /// Maximum flight time; the missile self-destructs after it.
@@ -325,19 +338,10 @@ pub const FLARE_RANGE: f32 = 5000.0;
 pub const FLARE_MIN_RANGE: f32 = 350.0;
 
 // Enemy missiles and radar warning.
-/// Missiles per enemy fighter: none in the first wave, one more each wave up to the
-/// maximum (one on easy).
-pub const BOT_MISSILES: f32 = 2.0;
-pub const BOT_MISSILES_EASY: f32 = 1.0;
 pub const BOT_MISSILE_MIN_RANGE: f32 = 900.0;
 pub const BOT_MISSILE_MAX_RANGE: f32 = 4000.0;
-pub const BOT_LOCK_CONE_DEG: f32 = 15.0;
-/// Seconds a bot needs to lock the player at skill 1.
-pub const BOT_LOCK_TIME: f32 = 2.0;
 /// Minimum gap (s) between two launches of the same bot.
 pub const BOT_MISSILE_INTERVAL: f32 = 8.0;
-/// Hull damage of an enemy missile hit at difficulty easy, medium, hard.
-pub const BOT_MISSILE_DAMAGE: [f32; 3] = [45.0, 60.0, 75.0];
 
 // Fuel and system damage.
 /// Mass relative to the nominal (half-tank) mass: 1 + FUEL_MASS * (fuel - 0.5).
@@ -380,23 +384,8 @@ pub const SPIN_YAW: f32 = 0.6;
 /// airframe takes OVERSPEED_DAMAGE hull points per second per m/s of excess.
 pub const OVERSPEED_LIMIT: f32 = 1.08;
 pub const OVERSPEED_DAMAGE: f32 = 0.6;
-/// Seconds stopped in a hangar before the ground crew has rearmed, refuelled and repaired
-/// (Arcade / Simulator).
-pub const REARM_TIME: f32 = 4.0;
-pub const SIM_REARM_TIME: f32 = 90.0;
-
-// Simulator realism.
-/// Touchdown limits: sink rate (m/s) that breaks the gear, sink rate that damages it,
-/// minimum up-vector y (~20 deg of bank) and the touchdown speed (share of the stall
-/// speed) the tyres survive.
-pub const SIM_MAX_SINK_RATE: f32 = 6.0;
-pub const SIM_HARD_LANDING_SINK: f32 = 3.0;
-pub const SIM_MIN_LANDING_UP: f32 = 0.94;
-pub const SIM_MAX_TOUCHDOWN: f32 = 2.0;
-/// Seconds outside WORLD_LIMIT before the aircraft is lost (no magic turn back).
-pub const SIM_OUT_OF_BOUNDS_TIME: f32 = 30.0;
-/// Hull damage of an enemy missile hit: a warhead at the fuse is a kill.
-pub const SIM_MISSILE_DAMAGE: f32 = 150.0;
+/// Seconds stopped in a hangar before the ground crew has rearmed, refuelled and repaired.
+pub const REARM_TIME: f32 = 90.0;
 
 /// A service hangar on the airfield: centre (x, z) and the heading of its open front
 /// (rad about +y; 0 faces +z). Mirrored in `web/js/world.js` (HANGARS).

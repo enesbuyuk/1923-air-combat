@@ -103,7 +103,7 @@ impl Game {
             return;
         }
         let p = &self.player;
-        let visible = p.airborne() && p.pos.y > SAM_RADAR_FLOOR;
+        let visible = p.airborne() && self.environment.agl(p.pos) > SAM_RADAR_FLOOR;
         let (ppos, skill) = (p.pos, self.difficulty().skill);
         for gi in 0..MAX_GROUND {
             let g = self.ground[gi];
@@ -113,7 +113,7 @@ impl Game {
             let mut g = g;
             g.missile_cd -= dt;
             let dist = ppos.sub(g.pos).len();
-            if visible && dist < SAM_RANGE {
+            if visible && dist < SAM_RANGE && self.environment.clear_line(g.pos.add(UP.mul(5.0)), ppos) {
                 g.lock = (g.lock + dt * skill / SAM_LOCK_TIME).min(1.0);
             } else {
                 g.lock = (g.lock - dt).max(0.0);
@@ -121,7 +121,7 @@ impl Game {
             if g.lock >= 1.0 && g.missile_cd <= 0.0 {
                 let pos = g.pos.add(UP.mul(6.0));
                 let dir = ppos.sub(pos).norm();
-                if self.launch_missile(pos, UP.mul(60.0).add(dir.mul(60.0)), Track::Player, Owner::Bot) {
+                if self.launch_radar_missile(pos, UP.mul(60.0).add(dir.mul(60.0)), Track::Player, Owner::Bot) {
                     g.missile_cd = SAM_INTERVAL / skill;
                     g.lock = 0.5;
                     self.event(event::ENEMY_MISSILE, pos, 1.0);
@@ -142,7 +142,16 @@ impl Game {
             self.ground[i] = if i < count {
                 let a = self.rng.range(0.0, 2.0 * PI);
                 let r = self.rng.range(300.0, 2200.0);
-                let pos = V3::new(center.x + a.cos() * r, 3.0, center.z + a.sin() * r);
+                let mut x = center.x + a.cos() * r;
+                let mut z = center.z + a.sin() * r;
+                // Sites belong on dry land; search inland without moving the airfield.
+                for _ in 0..64 {
+                    let h = self.environment.height(x, z);
+                    if self.environment.surface(x, z) != crate::environment::Surface::Water
+                        && self.environment.contact(V3::new(x, h + 5.0, z), 22.0, 5.0).is_none() { break; }
+                    z -= 500.0; x += 50.0;
+                }
+                let pos = V3::new(x, self.environment.height(x, z) + 3.0, z);
                 let cd = self.rng.range(2.0, SAM_INTERVAL);
                 GroundTarget { alive: true, pos, hp: SAM_HP, missile_cd: cd, lock: 0.0 }
             } else {

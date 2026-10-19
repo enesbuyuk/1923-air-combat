@@ -16,6 +16,7 @@
 //! together with a fourth-order Runge-Kutta step.
 
 use super::air::{density_ratio, drag_coefficient, ground_effect, speed_of_sound, wave_drag};
+use super::configuration;
 use crate::config::*;
 use crate::entities::{Airframe, Input};
 use crate::math::{clamp, Q, V3, FORWARD, RIGHT, UP};
@@ -71,7 +72,7 @@ pub fn ram_gain(s: &Stats, engine: f32, mach: f32) -> f32 {
 pub fn thrust(af: &Airframe) -> f32 {
     let s = af.stats();
     let health = 0.3 + 0.7 * af.engine_health;
-    s.thrust * af.engine * thrust_lapse(af.density) * ram_gain(&s, af.engine, af.mach) * health * af.thrust_scale / af.mass()
+    s.thrust * af.engine * thrust_lapse(af.density) * ram_gain(&s, af.engine, af.mach) * health / af.mass()
 }
 
 /// Engine spool: output follows the throttle with a lag, slowest from idle. A dry tank
@@ -85,9 +86,6 @@ pub fn spool_engine(af: &mut Airframe, dt: f32) {
 
 /// Fuel flow grows with the square of engine output (afterburner); a holed tank leaks.
 pub fn burn_fuel(af: &mut Airframe, dt: f32) {
-    if !af.burns_fuel {
-        return;
-    }
     let s = af.stats();
     let e = af.engine;
     let share = if !s.afterburner {
@@ -148,6 +146,10 @@ struct Env {
     brake: bool,
     /// Control surface effectiveness left after combat damage.
     ctrl: f32,
+    lift_factor: f32,
+    camber: f32,
+    config_drag: f32,
+    ground: f32,
 }
 
 /// Airflow and loads at one state.
@@ -178,14 +180,14 @@ fn loads(b: &Body, e: &Env) -> Loads {
     let body = b.q.conj().rotate(dir);
     let alpha = (-body.y).atan2(-body.z);
     let beta = body.x.atan2(-body.z);
-    let ge = ground_effect(b.pos.y, s.span);
-    let q_lift = lift_scale(s, v, e.density, e.mass);
+    let ge = ground_effect(b.pos.y - e.ground, s.span);
+    let q_lift = lift_scale(s, v, e.density, e.mass) * e.lift_factor;
     let avail = q_lift * (1.0 + GROUND_EFFECT_LIFT * ge);
-    let depth = stall_depth(alpha, s.alpha_max, avail);
+    let depth = stall_depth(alpha + e.camber, s.alpha_max, avail);
 
     let fwd = b.q.rotate(FORWARD);
     let right = b.q.rotate(RIGHT);
-    let cl = lift_coefficient(alpha, s.alpha_max);
+    let cl = lift_coefficient(alpha + e.camber, s.alpha_max);
     // Separated flow over a stalled wing carries less lift.
     let lift_g = cl * avail * (1.0 - STALL_LIFT_LOSS * depth);
     let lift_dir = right.cross(dir).norm();
@@ -193,7 +195,7 @@ fn loads(b: &Body, e: &Env) -> Loads {
     let side_dir = dir.cross(lift_dir);
 
     let mach = v / e.sound;
-    let mut parasitic = e.k_drag * v * v * wave_drag(mach) + LINEAR_DRAG * v;
+    let mut parasitic = (e.k_drag * wave_drag(mach) + e.config_drag) * v * v + LINEAR_DRAG * v;
     if e.brake {
         // Speed brake
         parasitic += 0.05 * v + 1.5 * e.k_drag * v * v;
@@ -295,7 +297,10 @@ fn flight_controls(af: &Airframe, inp: &Input, e: &Env, l: &Loads) -> V3 {
     // With the stick centred the flight controls trim for the load factor that keeps the
     // flight path straight (in a bank up to 60 deg too), so the nose rides a few degrees
     // above the path at low speed. Near knife-edge there is nothing to trim with.
-    let alpha_1g = s.alpha_max / q_lift;
+    // Trim and load-factor limiting use the lift actually available, including the
+    // ground cushion. Otherwise the controller holds excess lift a few metres above
+    // the runway and a gentle approach can float indefinitely.
+    let alpha_1g = s.alpha_max / avail;
     let dir = l.dir;
     let right = af.q.rotate(RIGHT);
     let cos_path = (1.0 - dir.y * dir.y).max(0.0).sqrt();
@@ -308,14 +313,14 @@ fn flight_controls(af: &Airframe, inp: &Input, e: &Env, l: &Loads) -> V3 {
     // AoA / G limiter. Near the 1 G stall speed a hard pull drags the AoA a little past it,
     // onto the back of the lift curve.
     let overshoot = inp.pitch.max(0.0) * clamp((1.0 + STALL_RANGE - avail) / STALL_RANGE, 0.0, 1.0);
-    let a_hi = s.alpha_max.min(s.g_limit * alpha_1g) * (1.0 + STALL_OVERSHOOT * overshoot);
+    let a_hi = (s.alpha_max.min(s.g_limit * alpha_1g) - e.camber) * (1.0 + STALL_OVERSHOOT * overshoot);
     let a_lo = (-0.5 * s.alpha_max).max(-NEG_G_LIMIT * alpha_1g);
-    let mut alpha_trim = clamp(n_trim * alpha_1g, a_lo, a_hi);
+    let mut alpha_trim = clamp(n_trim * alpha_1g - e.camber, a_lo, a_hi);
     // Slow, the stick still holds the AoA it asks for: stick back keeps a stalled wing
     // stalled (and a spin spinning) until it is released.
     // Takeoff and landing gains, 0 (off) to 1 (low and slow): see LOW_GAIN_HEIGHT.
     let low = if af.low_gains {
-        let height = clamp(1.0 - (af.pos.y - GEAR_HEIGHT) / LOW_GAIN_HEIGHT, 0.0, 1.0);
+        let height = clamp(1.0 - (af.pos.y - e.ground - GEAR_HEIGHT) / LOW_GAIN_HEIGHT, 0.0, 1.0);
         height * clamp((LOW_GAIN_SPEED + LOW_GAIN_FADE - eas / s.stall_speed) / LOW_GAIN_FADE, 0.0, 1.0)
     } else {
         0.0
@@ -363,6 +368,7 @@ pub fn fly(af: &mut Airframe, inp: &Input, air: V3, roll_bump: f32, dt: f32) {
     spool_engine(af, dt);
     burn_fuel(af, dt);
     af.density = density_ratio(af.pos.y);
+    configuration::update(af, dt);
     let mut e = Env {
         s,
         mass: af.mass(),
@@ -374,6 +380,10 @@ pub fn fly(af: &mut Airframe, inp: &Input, air: V3, roll_bump: f32, dt: f32) {
         surf: af.surf,
         brake: inp.brake,
         ctrl: 0.35 + 0.65 * af.control_health,
+        lift_factor: configuration::lift_factor(af),
+        camber: configuration::camber(af),
+        config_drag: configuration::drag(af),
+        ground: af.ground_height,
     };
     let body = Body { pos: af.pos, vel: af.vel, q: af.q, w: af.omega };
 

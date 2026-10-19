@@ -3,11 +3,15 @@
 mod aero;
 mod air;
 mod bots;
+mod configuration;
 mod flight;
 pub mod missions;
 mod projectiles;
+mod sensors;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod systems_tests;
 
 use crate::config::*;
 use crate::entities::*;
@@ -17,6 +21,10 @@ use air::Weather;
 pub use missions::Mode;
 
 pub struct Game {
+    pub environment: crate::environment::Environment,
+    pub obstacle_import: [f32; 1027],
+    contacts: [sensors::Contact; MAX_BOTS + MAX_GROUND],
+    sensor_timer: f32,
     pub(crate) rng: Rng,
     pub input: Input,
     pub(crate) player: Player,
@@ -35,9 +43,6 @@ pub struct Game {
     pub density: f32,
     pub difficulty: usize,
     pub(crate) mode: Mode,
-    /// Simulator realism: no aim assist, true-size hitboxes, real ammunition, strict
-    /// landing limits, no magic turn at the edge of the world, slow ground crew.
-    pub(crate) realism: bool,
     /// Mission stage (strike target areas cleared / escorts started).
     stage: u32,
     escort_leg: u32,
@@ -49,8 +54,6 @@ pub struct Game {
     events: Vec<f32>,
     /// Next bullet slot to try: the pool is used round-robin, so a free slot is found at once.
     bullet_cursor: usize,
-    /// Bot gun shots of the current step, reused so a step allocates nothing.
-    shots: Vec<(V3, V3)>,
     pub out_player: [f32; player::STRIDE],
     pub out_bots: [f32; MAX_BOTS * bot::STRIDE],
     pub out_bullets: [f32; MAX_BULLETS * bullet::STRIDE],
@@ -66,9 +69,13 @@ impl Game {
         let mut rng = Rng(seed.max(1));
         let weather = Weather::new(&mut rng);
         Game {
+            environment: crate::environment::Environment::default(),
+            obstacle_import: [0.0; 1027],
+            contacts: [sensors::Contact::default(); MAX_BOTS + MAX_GROUND],
+            sensor_timer: 0.0,
             rng,
             input: Input::default(),
-            player: Player::on_runway(ty, false),
+            player: Player::on_runway(ty),
             bots: [Bot::DEAD; MAX_BOTS],
             bullets: [Bullet::NONE; MAX_BULLETS],
             missiles: [Missile::NONE; MAX_MISSILES],
@@ -83,7 +90,6 @@ impl Game {
             density: 1.0,
             difficulty: DEFAULT_DIFFICULTY,
             mode: Mode::Waves,
-            realism: false,
             stage: 0,
             escort_leg: 0,
             mission_timer: 0.0,
@@ -92,7 +98,6 @@ impl Game {
             time: 0.0,
             events: Vec::with_capacity(MAX_EVENTS * event::STRIDE),
             bullet_cursor: 0,
-            shots: Vec::with_capacity(MAX_BOTS * 2),
             out_player: [0.0; player::STRIDE],
             out_bots: [0.0; MAX_BOTS * bot::STRIDE],
             out_bullets: [0.0; MAX_BULLETS * bullet::STRIDE],
@@ -110,18 +115,6 @@ impl Game {
 
     pub fn set_mode(&mut self, mode: Mode) {
         self.start_mode(mode);
-    }
-
-    pub fn set_realism(&mut self, on: bool) {
-        self.realism = on;
-        // Parked on the runway the new load goes on at once; in the air it waits for the
-        // ground crew (only the excess is taken away).
-        let fill = self.player.on_ground && self.player.speed < 1.0;
-        self.player.loadout(on, fill);
-    }
-
-    pub(super) fn rearm_time(&self) -> f32 {
-        if self.realism { SIM_REARM_TIME } else { REARM_TIME }
     }
 
     /// Queues an event for JS; silently dropped once the buffer is full.
@@ -152,12 +145,14 @@ impl Game {
     pub fn step(&mut self, dt: f32) {
         self.events.clear();
         let dt = clamp(dt, 0.0, MAX_STEP);
+        if dt <= 0.0 || !dt.is_finite() { self.write_out(); return; }
         let h = dt / SUBSTEPS as f32;
         for _ in 0..SUBSTEPS {
             self.time += h;
             self.update_weather(h);
             self.update_player(h);
             self.update_bots(h);
+            self.update_sensors(h);
             self.midair_collisions();
             self.update_bullets(h);
             self.update_missiles(h);
@@ -180,6 +175,23 @@ impl Game {
     }
 
     // ------------------------------------------------------------------ damage
+
+    /// Same swept building contact for human and AI aircraft, using the imported
+    /// polygons that also occlude sensors. The belly is shallower than the wingspan.
+    fn obstacle_contact(&self, from: V3, af: &Airframe) -> Option<(V3, f32, f32, f32)> {
+        let radius = af.stats().radius * 0.5;
+        let up = af.q.rotate(crate::math::UP).y;
+        let below = 2.5f32.max(radius * (1.0 - up * up).max(0.0).sqrt());
+        let distance = af.pos.sub(from);
+        let steps = (distance.len() / radius).ceil().max(1.0) as usize;
+        for i in 1..=steps {
+            let at = from.add(distance.mul(i as f32 / steps as f32));
+            if let Some((nx, nz, depth)) = self.environment.contact(at, radius, below) {
+                return Some((at, nx, nz, depth));
+            }
+        }
+        None
+    }
 
     fn kill_player(&mut self, at: V3) {
         let p = &mut self.player;
@@ -231,34 +243,21 @@ impl Game {
     }
 
     fn damage_systems(&mut self, dmg: f32, at: V3) {
-        // Bigger hits are more likely to reach a system.
-        let scale = (dmg / 10.0).min(3.0);
         let roll = self.rng.next();
-        let amount = dmg * SYSTEM_DAMAGE_PER_HP * self.rng.range(0.6, 1.4);
-        let af = &mut self.player.af;
-        let system = if roll < ENGINE_HIT_CHANCE * scale {
-            af.engine_health = (af.engine_health - amount).max(0.0);
-            1.0
-        } else if roll < (ENGINE_HIT_CHANCE + CONTROL_HIT_CHANCE) * scale {
-            af.control_health = (af.control_health - amount).max(0.0);
-            2.0
-        } else if roll < (ENGINE_HIT_CHANCE + CONTROL_HIT_CHANCE + TANK_HIT_CHANCE) * scale {
-            af.fuel_leak += dmg * LEAK_PER_HP;
-            3.0
-        } else {
-            return;
-        };
-        self.event(event::SYSTEM_DAMAGE, at, system);
+        let severity = self.rng.range(0.6, 1.4);
+        let system = configuration::system_damage(&mut self.player.af, dmg, roll, severity);
+        if system > 0.0 { self.event(event::SYSTEM_DAMAGE, at, system); }
     }
 
     fn damage_bot(&mut self, i: usize, dmg: f32, at: V3) {
+        let roll = self.rng.next();
+        let severity = self.rng.range(0.6, 1.4);
         let b = &mut self.bots[i];
         if !b.alive {
             return;
         }
         b.hp -= dmg;
-        // A shot-up engine gives less thrust.
-        b.af.engine_health = clamp(0.4 + 0.6 * b.hp / b.max_hp, 0.0, 1.0);
+        configuration::system_damage(&mut b.af, dmg, roll, severity);
         if b.hp > 0.0 {
             self.event(event::BOT_HIT, at, i as f32);
             return;
@@ -353,12 +352,13 @@ impl Game {
     /// (count, nearest distance, bearing from the nose, clockwise).
     fn threats(&self) -> (f32, f32, f32, f32) {
         let p = &self.player;
-        let bot_lock = self.bots.iter().filter(|b| b.alive && b.locking_player).map(|b| b.lock);
         let sam_lock = self.ground.iter().filter(|g| g.alive).map(|g| g.lock);
-        let rwr = bot_lock.chain(sam_lock).fold(0.0, f32::max);
+        // Air-to-air weapons use passive IR seekers; only SAM radar locks light the RWR.
+        let rwr = sam_lock.fold(0.0, f32::max);
         let mut count = 0.0;
         let mut nearest: Option<V3> = None;
         for m in self.missiles.iter().filter(|m| m.life > 0.0 && m.track == Track::Player) {
+            if m.pos.sub(p.pos).len() > 8000.0 || !self.environment.clear_line(p.pos, m.pos) { continue; }
             count += 1.0;
             if nearest.is_none_or(|n| m.pos.sub(p.pos).len() < n.sub(p.pos).len()) {
                 nearest = Some(m.pos);
@@ -378,7 +378,6 @@ impl Game {
     fn write_player(&mut self) {
         let p = &self.player;
         let s = p.stats();
-        let rearm_time = self.rearm_time();
         let air = self.weather.air_at(p.pos.y);
         // Rolling, `speed` is the ground speed; the gauge blends into the airspeed toward Vr
         // so it reads the same airspeed the flight model shows once airborne.
@@ -410,7 +409,7 @@ impl Game {
         o[player::STALL] = flag(p.stall);
         o[player::RESPAWN] = p.respawn.max(0.0);
         // True airspeed at which 1 G can no longer be held at this height and weight.
-        o[player::STALL_SPEED] = s.stall_speed * p.mass().sqrt() / p.density.sqrt();
+        o[player::STALL_SPEED] = s.stall_speed * (p.mass() / configuration::lift_factor(&p.af)).sqrt() / p.density.sqrt();
         o[player::ROTATE_SPEED] = s.rotate_speed;
         o[player::OUT_OF_BOUNDS] = flag(p.pos.flat().len() > WORLD_LIMIT * 0.9);
         o[player::MAX_SPEED] = s.max_speed;
@@ -420,16 +419,27 @@ impl Game {
         o[player::ENGINE_HEALTH] = p.engine_health;
         o[player::CONTROL_HEALTH] = p.control_health;
         o[player::FUEL_LEAK] = p.fuel_leak;
-        o[player::SERVICE] = if p.on_ground && p.parked > 0.0 { (p.parked / rearm_time).min(1.0) } else { 0.0 };
+        o[player::SERVICE] = if p.on_ground && p.parked > 0.0 { (p.parked / REARM_TIME).min(1.0) } else { 0.0 };
         o[player::MAX_MISSILES] = p.max_missiles;
         layout::put_v3(o, player::VEL, p.vel);
         o[player::IN_HANGAR] = flag(in_hangar(p.pos.x, p.pos.z));
         o[player::OVERSPEED] = p.overspeed();
-        o[player::LOST_IN] = if self.realism && p.outside > 0.0 { SIM_OUT_OF_BOUNDS_TIME - p.outside } else { -1.0 };
+        o[player::LOST_IN] = if p.outside > 0.0 { (OUT_OF_BOUNDS_TIME - p.outside).max(0.0) } else { -1.0 };
+        o[player::GEAR] = p.gear_position;
+        o[player::GEAR_HEALTH] = p.gear_health;
+        o[player::FLAPS] = p.flaps;
+        o[player::FLAP_HEALTH] = p.flap_health;
+        o[player::AGL] = self.environment.agl(p.pos).max(0.0);
+        o[player::SURFACE] = self.environment.surface(p.pos.x, p.pos.z) as u8 as f32;
+        o[player::GEAR_COMMAND] = flag(p.gear_down);
+        o[player::FLAP_COMMAND] = p.flap_command;
+        o[player::EAS] = if p.on_ground { (p.speed - air.dot(p.heading)).max(0.0) * p.density.sqrt() } else { p.speed * p.density.sqrt() };
+        o[player::GEAR_LIMIT] = GEAR_SPEED_LIMIT;
+        o[player::FLAP_LIMIT] = FLAP_SPEED_LIMIT + (1.0 - p.flaps) * 35.0;
     }
 
     fn write_bots(&mut self) {
-        for (b, o) in self.bots.iter().zip(self.out_bots.chunks_exact_mut(bot::STRIDE)) {
+        for (i, (b, o)) in self.bots.iter().zip(self.out_bots.chunks_exact_mut(bot::STRIDE)).enumerate() {
             o[bot::ALIVE] = flag(b.alive);
             if !b.alive {
                 continue;
@@ -443,6 +453,13 @@ impl Game {
             o[bot::TACTIC] = b.tactic as u8 as f32;
             o[bot::MAX_HP] = b.max_hp;
             o[bot::ENGINE] = b.engine;
+            let c = self.contacts[i];
+            o[bot::DETECTED] = if c.ttl <= 0.0 { 0.0 } else if c.confirmed { 1.0 } else { -c.ttl };
+            layout::put_v3(o, bot::CONTACT_POS, c.pos);
+            o[bot::GEAR] = b.gear_position;
+            o[bot::FUEL] = b.fuel;
+            o[bot::AMMO] = b.ammo;
+            o[bot::FLAPS] = b.flaps;
         }
     }
 
@@ -452,6 +469,7 @@ impl Game {
             layout::put_v3(o, bullet::VEL, b.vel);
             o[bullet::LIFE] = b.life;
             o[bullet::OWNER] = b.owner as u8 as f32;
+            o[bullet::ROUNDS] = b.rounds;
         }
         for (m, o) in self.missiles.iter().zip(self.out_missiles.chunks_exact_mut(missile::STRIDE)) {
             layout::put_v3(o, missile::POS, m.pos);
@@ -460,16 +478,20 @@ impl Game {
             o[missile::TARGET] = m.track.code();
             o[missile::OWNER] = m.owner as u8 as f32;
             o[missile::BURN] = flag(m.burn > 0.0);
+            o[missile::RADAR] = flag(m.radar);
         }
         for (f, o) in self.flares.iter().zip(self.out_flares.chunks_exact_mut(flare::STRIDE)) {
             layout::put_v3(o, flare::POS, f.pos);
             o[flare::LIFE] = f.life;
         }
-        for (g, o) in self.ground.iter().zip(self.out_ground.chunks_exact_mut(ground::STRIDE)) {
+        for (i, (g, o)) in self.ground.iter().zip(self.out_ground.chunks_exact_mut(ground::STRIDE)).enumerate() {
             layout::put_v3(o, ground::POS, g.pos);
             o[ground::HP] = g.hp;
             o[ground::ALIVE] = flag(g.alive);
             o[ground::LOCK] = g.lock;
+            let c = self.contacts[MAX_BOTS + i];
+            o[ground::DETECTED] = if c.ttl <= 0.0 { 0.0 } else if c.confirmed { 1.0 } else { -c.ttl };
+            layout::put_v3(o, ground::CONTACT_POS, c.pos);
         }
     }
 }

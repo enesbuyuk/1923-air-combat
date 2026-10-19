@@ -3,7 +3,7 @@
 // (sky and haze: atmosphere.js).
 
 import * as THREE from 'three';
-import { buildAtmosphere } from './atmosphere.js';
+import { buildAtmosphere, onTimeOfDay } from './atmosphere.js';
 import { createCity } from './city.js';
 import { loadBuildings } from './buildings.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -97,13 +97,41 @@ const tile2lat = (y, z) => {
   return (180 / Math.PI) * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
 };
 
-function tileLayer(scene, renderer, zoom, radius, y, order, fallback, stats) {
+/** World x/z rectangle { minX, maxX, minZ, maxZ }: is (x, z) strictly inside? */
+const inside = (r, x, z) => x > r.minX && x < r.maxX && z > r.minZ && z < r.maxZ;
+
+/**
+ * Leave out the triangles of `geo` (its vertices offset by ox, oz) that lie wholly inside
+ * rectangle `r`, where a finer layer covers them. Hidden ground is not free: logarithmic
+ * depth is written per fragment, which turns off the GPU's early depth test, so every
+ * layer underneath would be shaded again. Triangles across the edge stay, so no gap opens.
+ * Returns whether any triangle is left.
+ */
+function cutHole(geo, ox, oz, r) {
+  const p = geo.attributes.position;
+  const index = geo.index;
+  const keep = [];
+  const out = (v) => !inside(r, p.getX(v) + ox, p.getZ(v) + oz);
+  for (let i = 0; i < index.count; i += 3) {
+    const a = index.getX(i), b = index.getX(i + 1), c = index.getX(i + 2);
+    if (out(a) || out(b) || out(c)) keep.push(a, b, c);
+  }
+  geo.setIndex(keep);
+  return keep.length > 0;
+}
+
+/**
+ * One zoom level of satellite tiles, (2·radius + 1)² of them around the airfield, minus
+ * what the finer layer inside `hole` covers (cutHole). Returns the layer's own extent.
+ */
+function tileLayer(scene, renderer, zoom, radius, y, order, fallback, stats, terrain, hole = null) {
   const loader = new THREE.TextureLoader();
   loader.setCrossOrigin('anonymous');
   const cx = Math.floor(lon2tile(LON0, zoom));
   const cy = Math.floor(lat2tile(LAT0, zoom));
   const aniso = renderer.capabilities.getMaxAnisotropy();
   const group = new THREE.Group();
+  const extent = { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity };
   for (let dy = -radius; dy <= radius; dy++) {
     for (let dx = -radius; dx <= radius; dx++) {
       const tx = cx + dx;
@@ -112,8 +140,21 @@ function tileLayer(scene, renderer, zoom, radius, y, order, fallback, stats) {
       const se = geoToWorld(tile2lat(ty + 1, zoom), tile2lon(tx + 1, zoom));
       const w = se.x - nw.x;
       const h = se.z - nw.z;
-      const geo = new THREE.PlaneGeometry(w, h);
+      extent.minX = Math.min(extent.minX, nw.x, se.x);
+      extent.maxX = Math.max(extent.maxX, nw.x, se.x);
+      extent.minZ = Math.min(extent.minZ, nw.z, se.z);
+      extent.maxZ = Math.max(extent.maxZ, nw.z, se.z);
+      const geo = new THREE.PlaneGeometry(w, h, Math.ceil(w / 50), Math.ceil(h / 50));
       geo.rotateX(-Math.PI / 2);
+      const positions = geo.attributes.position;
+      for (let i = 0; i < positions.count; i++) positions.setY(i, terrain.terrainHeight(positions.getX(i) + nw.x + w / 2, positions.getZ(i) + nw.z + h / 2));
+      geo.computeVertexNormals();
+      // Wholly covered by the finer layer: neither drawn nor downloaded.
+      if (hole && !cutHole(geo, nw.x + w / 2, nw.z + h / 2, hole)) {
+        geo.dispose();
+        continue;
+      }
+      geo.computeBoundingSphere();
       const mat = new THREE.MeshLambertMaterial({
         color: fallback, polygonOffset: true, polygonOffsetFactor: -order, polygonOffsetUnits: -order * 4,
       });
@@ -140,7 +181,7 @@ function tileLayer(scene, renderer, zoom, radius, y, order, fallback, stats) {
   }
   freeze(group);
   scene.add(group);
-  return group;
+  return extent;
 }
 
 // ---------------------------------------------------------------------------
@@ -192,7 +233,7 @@ function runwayTexture(ref, length, width) {
   return tex;
 }
 
-function buildAirfield(scene) {
+function buildAirfield(scene, colliders) {
   const group = new THREE.Group();
   for (const r of RUNWAYS) {
     const dx = r.b[0] - r.a[0];
@@ -226,7 +267,7 @@ function buildAirfield(scene) {
   apronMesh.renderOrder = 7;
   group.add(apronMesh);
   const padMat = new THREE.MeshLambertMaterial({ color: 0x5c5e60, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -30 });
-  const hMat = new THREE.MeshBasicMaterial({ color: 0xf2f2f2, polygonOffset: true, polygonOffsetFactor: -7, polygonOffsetUnits: -35 });
+  const hMat = new THREE.MeshLambertMaterial({ color: 0xf2f2f2, polygonOffset: true, polygonOffsetFactor: -7, polygonOffsetUnits: -35 });
   const hShape = new THREE.Shape();
   hShape.moveTo(-3, -4); hShape.lineTo(-1.8, -4); hShape.lineTo(-1.8, -0.6); hShape.lineTo(1.8, -0.6);
   hShape.lineTo(1.8, -4); hShape.lineTo(3, -4); hShape.lineTo(3, 4); hShape.lineTo(1.8, 4);
@@ -245,6 +286,7 @@ function buildAirfield(scene) {
   cab.position.y = 24;
   tower.add(tBase, cab);
   tower.position.set(-250, 0, 260);
+  colliders.add(footprint([[-256, 254], [-244, 254], [-244, 266], [-256, 266]], 26));
   tower.traverse((o) => { o.castShadow = true; });
   group.add(tower);
   // Windsock-ish Turkish flag pole near the tower.
@@ -285,6 +327,7 @@ const HANGAR_SOLIDS = [
   [-33, -31, -46, 34, 13.5],
   [31, 33, -46, 34, 13.5],
   [-33, 33, -46, -44, 13.5],
+  [-33, 33, -46, 34, 14, 13.5], // Roof slab; the interior below it remains taxiable.
 ];
 
 /** Place the hangars and register their walls with `colliders`; the model streams in. */
@@ -293,8 +336,8 @@ function buildHangars(scene, colliders) {
     const s = Math.sin(heading);
     const c = Math.cos(heading);
     const toWorld = (x, z) => [hx + x * c + z * s, hz - x * s + z * c];
-    for (const [x0, x1, z0, z1, top] of HANGAR_SOLIDS) {
-      colliders.add(footprint([toWorld(x0, z0), toWorld(x1, z0), toWorld(x1, z1), toWorld(x0, z1)], top));
+    for (const [x0, x1, z0, z1, top, bottom = 0] of HANGAR_SOLIDS) {
+      colliders.add(footprint([toWorld(x0, z0), toWorld(x1, z0), toWorld(x1, z1), toWorld(x0, z1)], top, bottom));
     }
   }
   new GLTFLoader().loadAsync(HANGAR_URL).then((gltf) => {
@@ -332,7 +375,7 @@ function flag(x, y, z) {
   g.closePath(); g.fill(); g.restore();
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
-  const m = new THREE.Mesh(new THREE.PlaneGeometry(4.5, 3), new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide }));
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(4.5, 3), new THREE.MeshLambertMaterial({ map: tex, side: THREE.DoubleSide }));
   m.position.set(x + 2.25, y, z);
   return m;
 }
@@ -348,19 +391,23 @@ function addRunwayLights(group, r, length) {
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
-  group.add(new THREE.Points(g, new THREE.PointsMaterial({ color: 0xfff2c0, size: 2.2, sizeAttenuation: true })));
+  const mat = new THREE.PointsMaterial({ color: 0xfff2c0, size: 2.2, sizeAttenuation: true });
+  // At night the edge lights burn brighter than white, so they bloom (post.js).
+  onTimeOfDay((night) => mat.color.set(0xfff2c0).multiplyScalar(night ? 6 : 1));
+  group.add(new THREE.Points(g, mat));
 }
 
 // ---------------------------------------------------------------------------
 // Sky and lights
 // ---------------------------------------------------------------------------
 
-export function buildWorld(scene, renderer) {
+export function buildWorld(scene, renderer, terrain) {
   const { sky, sun } = buildAtmosphere(scene, renderer);
   freeze(sky);
   // The sky (environment map) now supplies most of the ambient light; this only lifts
   // the shadowed sides of matte surfaces, which do not use the environment.
-  scene.add(new THREE.HemisphereLight(0xcfe3ff, 0x5a5040, 0.8));
+  const hemi = new THREE.HemisphereLight(0xcfe3ff, 0x5a5040, 0.8);
+  scene.add(hemi);
   const dir = new THREE.DirectionalLight(0xfff1dc, 2.4);
   dir.position.copy(sun).multiplyScalar(2000);
   dir.castShadow = true;
@@ -372,34 +419,48 @@ export function buildWorld(scene, renderer) {
   sc.far = 5000;
   dir.shadow.bias = -0.0005;
   scene.add(dir, dir.target);
+  // Night: cold moonlight from the sun's place and a faint sky, enough to read the ground.
+  onTimeOfDay((night) => {
+    hemi.color.set(night ? 0x5a6c94 : 0xcfe3ff);
+    hemi.groundColor.set(night ? 0x2a2420 : 0x5a5040);
+    hemi.intensity = night ? 0.3 : 0.8;
+    dir.color.set(night ? 0xa8bcff : 0xfff1dc);
+    dir.intensity = night ? 0.45 : 2.4;
+  });
+
+  // Imagery, finest layer first: each coarser one leaves out what the finer one covers.
+  const tiles = { total: 0, loaded: 0, failed: 0 };
+  const fine = tileLayer(scene, renderer, 17, 4, 0, 3, 0x8a8a70, tiles, terrain);
+  const mid = tileLayer(scene, renderer, 15, 4, -0.5, 2, 0x86846a, tiles, terrain, fine);
+  const coarse = tileLayer(scene, renderer, 13, 4, -1.0, 1, 0x7d7b62, tiles, terrain, mid);
 
   // Far ground under everything (beyond imagery).
-  const far = new THREE.Mesh(
-    new THREE.PlaneGeometry(200000, 200000).rotateX(-Math.PI / 2),
-    new THREE.MeshLambertMaterial({ color: 0x7b7a5e }),
-  );
+  const farGeo = new THREE.PlaneGeometry(200000, 200000, 512, 512).rotateX(-Math.PI / 2);
+  const fp = farGeo.attributes.position;
+  const colors = new Float32Array(fp.count * 3);
+  const landColor = new THREE.Color(0x7b7a5e), seaColor = new THREE.Color(0x1f4a6b);
+  for (let i = 0; i < fp.count; i++) {
+    const x = fp.getX(i), z = fp.getZ(i);
+    fp.setY(i, terrain.terrainHeight(x, z));
+    (terrain.terrainSurface(x, z) === 2 ? seaColor : landColor).toArray(colors, i * 3);
+  }
+  farGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  // The coarse horizon mesh must not poke through the much finer imagery terrain (nor
+  // be shaded under it), so leave it out where the imagery covers the ground.
+  cutHole(farGeo, 0, 0, coarse);
+  farGeo.computeVertexNormals();
+  const far = new THREE.Mesh(farGeo, new THREE.MeshLambertMaterial({ vertexColors: true }));
   far.position.y = -3;
   scene.add(far);
-  // Marmara Sea to the south-west, Black Sea to the north (rough placement for the horizon).
-  const water = new THREE.MeshStandardMaterial({ color: 0x1f4a6b, roughness: 0.2, metalness: 0.3 });
-  const marmara = new THREE.Mesh(new THREE.PlaneGeometry(120000, 60000).rotateX(-Math.PI / 2), water);
-  marmara.position.set(-20000, -2, 48000);
-  const blackSea = new THREE.Mesh(new THREE.PlaneGeometry(160000, 60000).rotateX(-Math.PI / 2), water);
-  blackSea.position.set(0, -2, -62000);
-  scene.add(marmara, blackSea);
   freeze(far);
-  freeze(marmara);
-  freeze(blackSea);
 
-  const tiles = { total: 0, loaded: 0, failed: 0 };
-  tileLayer(scene, renderer, 13, 4, -1.0, 1, 0x7d7b62, tiles);
-  tileLayer(scene, renderer, 15, 4, -0.5, 2, 0x86846a, tiles);
-  tileLayer(scene, renderer, 17, 4, 0, 3, 0x8a8a70, tiles);
-  buildAirfield(scene);
   // Real OSM buildings near the airfield, generated city beyond them.
   const osm = new FootprintGrid();
+  osm.onAdd = (f) => terrain.addObstacle(f);
+  buildAirfield(scene, osm);
   buildHangars(scene, osm);
-  const city = createCity(scene, loadBuildings(scene, osm, approachCeiling));
+  const buildingsReady = loadBuildings(scene, osm, approachCeiling, terrain);
+  const city = createCity(scene, buildingsReady, terrain);
 
   // Light-space axes of the shadow camera (it looks from the sun along -sun with +y up),
   // for snapping the frustum to whole shadow-map texels.
@@ -409,6 +470,7 @@ export function buildWorld(scene, renderer) {
 
   return {
     tiles,
+    ready: buildingsReady,
     /**
      * Keep the shadow frustum centred on the player and stream city chunks around them.
      * The centre moves in whole shadow-map texels across the light, so static shadows

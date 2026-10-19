@@ -33,6 +33,8 @@ export class TouchControls {
         <button data-tap="missile">MSL</button>
         <button data-hold="flare">FLR</button>
         <button data-hold="brake">BRK</button>
+        <button data-key="KeyG">GEAR</button>
+        <button data-key="KeyZ">FLAP</button>
         <button data-key="KeyV">CAM</button>
         <button data-key="Escape">II</button>
       </div>`;

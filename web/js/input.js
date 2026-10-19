@@ -34,7 +34,7 @@ const PAD = {
   PAUSE: 9, // Start / Options
 };
 /** Gamepad buttons that act like a one-shot key press. */
-const PAD_KEYS = { [PAD.CAMERA]: 'KeyV', [PAD.PAUSE]: 'Escape' };
+const PAD_KEYS = { [PAD.CAMERA]: 'KeyV', [PAD.PAUSE]: 'Escape', 12: 'KeyG', 13: 'KeyZ' };
 
 function shapeAxis(v) {
   const a = Math.abs(v);
@@ -64,6 +64,7 @@ export class Controls {
     this.padButtons = [];
     this.padConnected = false;
     this.padBrake = false;
+    this.incapacitated = false;
     this.input = { pitch: 0, roll: 0, yaw: 0, throttle: 0, gun: false, missile: false, brake: false, flare: false };
     this.touch = new TouchControls({ flying, onKey, controls: this });
 
@@ -101,13 +102,14 @@ export class Controls {
   }
 
   get brake() {
-    return this.keys.has('KeyB') || this.padBrake || this.touch.brake;
+    return !this.incapacitated && (this.keys.has('KeyB') || this.padBrake || this.touch.brake);
   }
 
   /** Centre the stick and close the throttle (new flight). */
   reset() {
     this.pitch = this.roll = this.yaw = 0;
     this.throttle = 0;
+    this.incapacitated = false;
     this.touch.reset();
   }
 
@@ -127,6 +129,8 @@ export class Controls {
    * Analog sticks (gamepad, touch) override the keys while deflected.
    */
   update(dt, incapacitated) {
+    this.incapacitated = incapacitated;
+    const previousThrottle = this.throttle;
     let pitch = this.axis(KEYS.PITCH_UP, KEYS.PITCH_DOWN);
     let roll = this.axis(KEYS.ROLL_RIGHT, KEYS.ROLL_LEFT);
     let yaw = this.axis(KEYS.YAW_RIGHT, KEYS.YAW_LEFT);
@@ -181,9 +185,11 @@ export class Controls {
       this.throttle = t.throttleSet;
       t.throttleSet = null;
     }
+    if (incapacitated) this.throttle = previousThrottle;
     t.showThrottle(this.throttle);
-    this.gun = this.keys.has('Space') || this.mouseGun || padGun || t.gun;
-    this.flare = this.keys.has('KeyC') || padFlare || t.flare;
+    this.gun = !incapacitated && (this.keys.has('Space') || this.mouseGun || padGun || t.gun);
+    this.flare = !incapacitated && (this.keys.has('KeyC') || padFlare || t.flare);
+    if (incapacitated) this.missileQueued = false;
   }
 
   /**

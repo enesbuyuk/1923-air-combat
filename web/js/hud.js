@@ -1,6 +1,8 @@
 // Head-up display drawn on a 2D canvas overlay.
 
 import { GEAR_HEIGHT } from './sim.js';
+import { AIRCRAFT } from './aircraft.js';
+import { afterburnerShare } from './exhaust.js';
 import { MODE } from './layout.js';
 import { drawMap } from './minimap.js';
 import { worldToGeo, HANGARS } from './world.js';
@@ -27,12 +29,15 @@ const KEY_ROWS = [
   [['Shift'], 'Throttle up'],
   [['Ctrl'], 'Throttle down'],
   [['Space'], 'Cannon'],
+  [['G'], 'Landing gear'],
+  [['Z'], 'Flaps'],
   [['X'], 'Missile'],
   [['C'], 'Flares'],
   [['B'], 'Brake / airbrake'],
   [['V'], 'Camera'],
   [['I'], 'Invert pitch'],
   [['M'], 'Mute'],
+  [['N'], 'Mute warnings'],
   [['Esc'], 'Pause'],
   [['H'], 'Hide controls'],
 ];
@@ -112,7 +117,7 @@ export class Hud {
    *   p (Sim.player()), stats (Sim.stats()), dt, pitchDeg, bankDeg, headingDeg, fovDeg,
    *   targets: [{x, y, onScreen, dist, locked, b2}] (CSS px), lockProgress,
    *   radar: [{dx, dz, locked, b2}], base: {dx, dz}, cockpit, canopyFrame, invert,
-   *   maxMissiles, aircraftName, gearDown, airbrake, gStress
+   *   maxMissiles, aircraftName, gearDown, airbrake, gStress, gNegative, gUnconscious, gRecovering
    * }
    */
   draw(s) {
@@ -149,7 +154,7 @@ export class Hud {
       if (!p.onGround) this.flightPathMarker(g, cx, cy, p, s);
       this.targets(g, w, h, s);
       this.weapons(g, w, h, p, s);
-      this.warnings(g, cx, cy, p, s);
+      this.warnings(g, w, h, p, s);
     } else {
       g.textAlign = 'center';
       g.fillStyle = DANGER;
@@ -264,7 +269,7 @@ export class Hud {
   }
 
   tapes(g, w, h, cx, cy, p) {
-    const kmh = Math.round(p.speed * 3.6);
+    const kmh = Math.round(p.eas * 3.6);
     const alt = Math.round(p.y - GEAR_HEIGHT);
     const vs = p.verticalSpeed;
     g.strokeStyle = PRIMARY;
@@ -291,17 +296,20 @@ export class Hud {
     };
     const lx = cx - Math.min(320, w * 0.3);
     const rx = cx + Math.min(320, w * 0.3);
-    box(lx, 'SPD km/h', String(kmh), `M ${p.mach.toFixed(2)}`, false);
+    box(lx, 'EAS km/h', String(kmh), `M ${p.mach.toFixed(2)}`, false);
     box(rx, 'ALT m', String(alt), `${vs >= 0 ? '▲' : '▼'} ${Math.abs(vs).toFixed(0)} m/s`, true);
     g.font = font(600, 13);
     g.textAlign = 'center';
     g.fillText(`G ${p.gLoad.toFixed(1)}`, lx, cy + 52);
     g.fillText(`α ${((p.alpha * 180) / Math.PI).toFixed(1)}°`, lx, cy + 70);
+    g.fillText(`TAS ${Math.round(p.speed * 3.6)} km/h`, lx, cy + 88);
+    g.fillText(`AGL ${Math.round(p.agl)} m`, rx, cy + 52);
+    g.fillText(['PAVED', 'SOIL', 'WATER'][p.surface] ?? '', rx, cy + 70);
     // Wind: the direction it blows from, like a METAR.
     const [wx, , wz] = p.wind;
     const wspd = Math.hypot(wx, wz);
     const wfrom = Math.round(((Math.atan2(-wx, wz) * 180) / Math.PI + 360) % 360);
-    g.fillText(`WIND ${String(wfrom).padStart(3, '0')}° ${wspd.toFixed(0)} m/s`, rx, cy + 52);
+    g.fillText(`WIND ${String(wfrom).padStart(3, '0')}° ${wspd.toFixed(0)} m/s`, rx, cy + 88);
   }
 
   /** Flight path marker: where the aircraft is actually going, offset from the nose by AoA and sideslip. */
@@ -414,20 +422,21 @@ export class Hud {
     const ty = y + 28;
     // Bar: engine output (spools up/down); tick: throttle lever.
     const th = p.engine;
+    const burning = afterburnerShare(AIRCRAFT[p.type], th) > 0;
     const lever = p.throttle;
     const tH = ph - 46;
     g.fillStyle = PRIMARY;
     g.fillText('THR', tx, y + 16);
     g.strokeStyle = EDGE;
     g.strokeRect(tx, ty, 14, tH);
-    g.fillStyle = th > 0.95 ? WARN : PRIMARY;
+    g.fillStyle = burning ? WARN : PRIMARY;
     g.fillRect(tx + 2, ty + tH - 2 - th * (tH - 4), 10, th * (tH - 4));
     const ly = ty + tH - 2 - lever * (tH - 4);
     g.fillStyle = TEXT;
     g.fillRect(tx - 3, ly - 1, 20, 2);
-    g.fillStyle = th > 0.95 ? WARN : PRIMARY;
+    g.fillStyle = burning ? WARN : PRIMARY;
     g.fillText(`${Math.round(th * 100)}`, tx + 20, ty + tH - th * (tH - 4));
-    if (th > 0.95) g.fillText('AB', tx + 20, ty + tH - th * (tH - 4) + 14);
+    if (burning) g.fillText('AB', tx + 20, ty + tH - th * (tH - 4) + 14);
 
     const hx = x + 76;
     const bw = pw - 92;
@@ -494,23 +503,31 @@ export class Hud {
     g.fillStyle = TEXT_DIM;
     g.fillText(`${s.cockpit ? 'Cockpit' : 'Chase'} cam${s.invert ? ' · Inverted pitch' : ''}`, hx, y + 144);
     g.fillStyle = s.gearDown ? WARN : TEXT_DIM;
-    g.fillText(`Gear ${s.gearDown ? 'down' : 'up'}${s.airbrake ? ' · Airbrake' : ''}`, hx, y + 162);
+    g.font = font(500, 11, BODY);
+    const gear = p.gear > 0.97 ? 'DOWN' : p.gear < 0.03 ? 'UP' : `${p.gearCommand ? '↓' : '↑'}${Math.round(p.gear * 100)}%`;
+    const flap = Math.abs(p.flaps - p.flapCommand) < 0.01 ? `${Math.round(p.flaps * 100)}%` : `${Math.round(p.flaps * 100)}→${Math.round(p.flapCommand * 100)}%`;
+    g.fillText(`GEAR ${gear} · FLP ${flap}${s.airbrake ? ' · BRK' : ''}`, hx, y + 162);
   }
 
-  warnings(g, cx, cy, p, s) {
+  warnings(g, w, h, p, s) {
     const items = [];
+    const urgent = [];
     const blink = (performance.now() / 300) % 2 < 1;
     const st = s.stats;
     if (st.missileWarn > 0) {
-      if (blink) items.push([`MISSILE ${clock(st.missileBearing)} · ${(st.missileDist / 1000).toFixed(1)} km · FLARES (C)`, DANGER]);
+      urgent.push([`MISSILE ${clock(st.missileBearing)} · ${(st.missileDist / 1000).toFixed(1)} km · FLARES (C)`, DANGER]);
     } else if (st.rwrLock >= 0.999) {
-      items.push(['RADAR LOCK', DANGER]);
+      urgent.push(['RADAR LOCK', DANGER]);
     }
-    if (p.fuel <= 0 && !p.onGround) items.push(['FLAMEOUT · OUT OF FUEL', DANGER]);
+    if (p.fuel <= 0 && !p.onGround) urgent.push(['FLAMEOUT · OUT OF FUEL', DANGER]);
     else if (p.fuel < BINGO_FUEL) items.push(['BINGO FUEL · RETURN TO BASE', WARN]);
     if (p.fuelLeak > 0) items.push(['FUEL LEAK', WARN]);
     if (p.engineHealth < 0.8) items.push([`ENGINE DAMAGED · ${Math.round(30 + 70 * p.engineHealth)}% THRUST`, p.engineHealth < 0.5 ? DANGER : WARN]);
     if (p.controlHealth < 0.8) items.push(['FLIGHT CONTROLS DAMAGED', p.controlHealth < 0.5 ? DANGER : WARN]);
+    if (p.gearHealth < 0.8) items.push(['LANDING GEAR DAMAGED', DANGER]);
+    if (p.flapHealth < 0.8) items.push(['FLAPS DAMAGED', WARN]);
+    if (p.gear > 0.05 && p.eas > p.gearLimit * 0.9) items.push(['GEAR SPEED LIMIT · RETRACT (G)', WARN]);
+    if (p.flaps > 0.05 && p.eas > p.flapLimit * 0.95) items.push(['FLAP SPEED LIMIT · RETRACT (Z)', WARN]);
     if (p.onGround) {
       const vr = Math.round(p.rotateSpeed * 3.6);
       const nearBase = Math.hypot(s.base.dx, s.base.dz) < 1200;
@@ -519,12 +536,15 @@ export class Hud {
       else if (nearBase && p.speed > 3 && p.speed < 60 && p.throttle < 0.3) items.push(['Taxi into a hangar to rearm, refuel and repair', PRIMARY]);
       else items.push([p.speed < p.rotateSpeed ? `Throttle up (Shift) · rotate with S at ${vr} km/h` : 'ROTATE · pull up with S', p.speed < p.rotateSpeed ? PRIMARY : WARN]);
     } else {
-      if (p.stall && blink) items.push(['STALL', DANGER]);
-      if (p.overspeed && blink) items.push(['OVERSPEED', DANGER]);
-      if (s.gStress > 0.25 && blink) items.push([p.gLoad < 0 ? 'NEGATIVE G' : 'OVER-G', s.gStress > 0.6 ? DANGER : WARN]);
-      const agl = p.y;
+      if (p.stall) urgent.push(['STALL', DANGER]);
+      if (p.overspeed) urgent.push(['OVERSPEED', DANGER]);
+      if (s.gUnconscious) urgent.push(['G-LOC', DANGER]);
+      else if (s.gRecovering) urgent.push(['G-LOC · RECOVERING', WARN]);
+      else if (s.gStress > 0.25) urgent.push([s.gNegative ? 'NEGATIVE G' : 'HIGH G · UNLOAD', s.gStress > 0.6 ? DANGER : WARN]);
+      const agl = p.agl;
+      if (agl < 200 && p.verticalSpeed < -1 && p.speed < 140 && p.gear < 0.97) items.push(['CHECK GEAR · G', DANGER]);
       const vs = p.verticalSpeed;
-      if (agl < 300 && vs < -15 && blink) items.push(['PULL UP', DANGER]);
+      if (agl < 300 && vs < -15) urgent.push(['PULL UP', DANGER]);
       if (p.lostIn >= 0) items.push([`OUTSIDE COMBAT AREA · RETURN IN ${Math.ceil(p.lostIn)} s`, DANGER]);
       else if (p.outOfBounds) items.push(['LEAVING COMBAT AREA · RETURN TO BASE', WARN]);
       if (p.ammo <= 0) items.push(['GUN EMPTY', WARN]);
@@ -532,15 +552,61 @@ export class Hud {
       const nearBase = Math.hypot(s.base.dx, s.base.dz) < 6000;
       if (nearBase && agl < 400 && vs < 0 && p.speed * 3.6 > 400) items.push(['Approach: cut throttle (Ctrl), airbrake (B), below 350 km/h', PRIMARY]);
     }
-    g.textAlign = 'center';
-    items.slice(0, 5).forEach(([t, c], i) => {
-      const y = cy + 130 + i * 32;
-      g.font = font(700, 18);
-      const tw = g.measureText(t).width + 32;
-      panel(g, cx - tw / 2, y - 14, tw, 28, 8);
-      g.fillStyle = c;
-      g.fillText(t, cx, y + 1);
-    });
+    items.unshift(...urgent);
+    if (!items.length) return;
+    // A compact rail under the mission card keeps the aircraft and sightline clear.
+    const pw = Math.min(284, Math.max(190, w - 290));
+    const x = w - pw - 20;
+    const y = w < 640 ? 136 : 96;
+    // Stop above the altitude box, or above the pitch ladder when the rail reaches over it.
+    const bottom = x < w / 2 + 220 ? h / 2 - 208 : h / 2 - 52;
+    const maxHeight = Math.max(104, bottom - y);
+    const rows = [];
+    let height = 30;
+    g.save();
+    g.shadowBlur = 0;
+    g.textAlign = 'left';
+    g.font = font(500, 14, BODY);
+    for (const [text, color] of items) {
+      const lines = [''];
+      for (const word of text.split(' ')) {
+        const i = lines.length - 1;
+        const candidate = lines[i] ? `${lines[i]} ${word}` : word;
+        if (lines[i] && g.measureText(candidate).width > pw - 42) lines.push(word);
+        else lines[i] = candidate;
+      }
+      const rowHeight = lines.length * 17 + 12;
+      const footerHeight = rows.length + 1 < items.length ? 24 : 6;
+      if (rows.length === 5 || (rows.length > 0 && height + rowHeight + footerHeight > maxHeight)) break;
+      rows.push({ lines, color, height: rowHeight });
+      height += rowHeight;
+    }
+    const remaining = items.length - rows.length;
+    panel(g, x, y, pw, height + (remaining ? 24 : 6), 8);
+    g.fillStyle = TEXT_DIM;
+    g.font = font(600, 10);
+    g.fillText('FLIGHT ALERTS', x + 14, y + 16);
+    g.textAlign = 'right';
+    g.fillText(String(items.length).padStart(2, '0'), x + pw - 14, y + 16);
+    g.textAlign = 'left';
+    g.font = font(500, 14, BODY);
+    let rowY = y + 30;
+    for (const row of rows) {
+      // Only the small severity marker pulses; the text and its position stay steady.
+      g.globalAlpha = row.color === DANGER && !blink ? 0.45 : 1;
+      g.fillStyle = row.color;
+      g.fillRect(x + 14, rowY + 4, 2, row.height - 12);
+      g.globalAlpha = 1;
+      g.fillStyle = row.color === PRIMARY ? TEXT_DIM : TEXT;
+      row.lines.forEach((line, i) => g.fillText(line, x + 26, rowY + 12 + i * 17));
+      rowY += row.height;
+    }
+    if (remaining) {
+      g.fillStyle = TEXT_DIM;
+      g.font = font(500, 12, BODY);
+      g.fillText(`+${remaining} more alerts`, x + 26, rowY + 10);
+    }
+    g.restore();
   }
 
   scoreboard(g, s) {
@@ -555,7 +621,7 @@ export class Hud {
     g.font = font(600, 12);
     g.fillStyle = PRIMARY;
     g.textAlign = 'right';
-    g.fillText(`WAVE ${st.wave}`, x + 214, y + 22);
+    g.fillText(st.mode === MODE.FREE ? 'FREE FLIGHT' : `WAVE ${st.wave}`, x + 214, y + 22);
     g.fillStyle = st.botsAlive > 0 ? DANGER : PRIMARY;
     g.fillText(`${st.botsAlive} HOSTILE`, x + 214, y + 38);
     g.textAlign = 'left';
@@ -569,7 +635,7 @@ export class Hud {
     g.textAlign = 'left';
     g.font = font(500, 14, BODY);
     g.fillStyle = PRIMARY;
-    if (st.botsAlive === 0 && st.waveTimer > 0) g.fillText(`Next wave in ${Math.ceil(st.waveTimer)} s`, x + 16, y + 84);
+    if (st.mode !== MODE.FREE && st.botsAlive === 0 && st.waveTimer > 0) g.fillText(`Next wave in ${Math.ceil(st.waveTimer)} s`, x + 16, y + 84);
     else g.fillText(s.aircraftName, x + 16, y + 84);
   }
 

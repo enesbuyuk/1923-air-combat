@@ -3,7 +3,7 @@
 export const MAX_EVENTS = 64;
 
 export const PLAYER = {
-  STRIDE: 48,
+  STRIDE: 60,
   POS: 0, // x, y, z
   QUAT: 3, // x, y, z, w
   SPEED: 7,
@@ -39,27 +39,30 @@ export const PLAYER = {
   VEL: 39, // x, y, z
   IN_HANGAR: 42, // 1 in a hangar's service bay
   OVERSPEED: 43, // equivalent airspeed past the structural limit, m/s
+  GEAR: 45, GEAR_HEALTH: 46, FLAPS: 47, FLAP_HEALTH: 48, AGL: 49, SURFACE: 50, GEAR_COMMAND: 51, FLAP_COMMAND: 52,
+  EAS: 53, GEAR_LIMIT: 54, FLAP_LIMIT: 55,
   LOST_IN: 44, // Simulator: seconds left to return inside the area, -1 none
 };
 
 export const BOT = {
-  STRIDE: 16, POS: 0, QUAT: 3, HP: 7, ALIVE: 8, TYPE: 9, SPEED: 10,
+  STRIDE: 24, POS: 0, QUAT: 3, HP: 7, ALIVE: 8, TYPE: 9, SPEED: 10,
   FRIENDLY: 11, TACTIC: 12, MAX_HP: 13, ENGINE: 14,
+  DETECTED: 15, CONTACT_POS: 16, GEAR: 19, FUEL: 20, AMMO: 21, FLAPS: 22,
 };
 
 /** Bot tactics (BOT.TACTIC), entities::Tactic in the core. */
-export const TACTIC = { PATROL: 0, ATTACK: 1, BREAK: 2, EVADE: 3, RECOVER: 4, ESCORT: 5 };
+export const TACTIC = { PATROL: 0, ATTACK: 1, BREAK: 2, EVADE: 3, RECOVER: 4, ESCORT: 5, RETURN: 6 };
 
-export const BULLET = { STRIDE: 8, POS: 0, VEL: 3, LIFE: 6, OWNER: 7 };
+export const BULLET = { STRIDE: 10, POS: 0, VEL: 3, LIFE: 6, OWNER: 7, ROUNDS: 8 };
 export const OWNER_PLAYER = 0;
 
 // TARGET: bot index, -1 none, -2 player, -3 flare, -(100 + i) ground target i.
-export const MISSILE = { STRIDE: 10, POS: 0, VEL: 3, LIFE: 6, TARGET: 7, OWNER: 8, BURN: 9 };
+export const MISSILE = { STRIDE: 12, POS: 0, VEL: 3, LIFE: 6, TARGET: 7, OWNER: 8, BURN: 9, RADAR: 10 };
 export const MISSILE_AT_PLAYER = -2;
 
 export const FLARE = { STRIDE: 4, POS: 0, LIFE: 3 };
 
-export const GROUND = { STRIDE: 6, POS: 0, HP: 3, ALIVE: 4, LOCK: 5 };
+export const GROUND = { STRIDE: 10, POS: 0, HP: 3, ALIVE: 4, LOCK: 5, DETECTED: 6, CONTACT_POS: 7 };
 /** Lock / missile target code of ground target `i`. */
 export const groundCode = (i) => -(100 + i);
 
@@ -123,3 +126,6 @@ export const STATS = {
 
 /** Result codes of `building_hit`. */
 export const BUILDING_HIT = { NONE: 0, SCRAPE: 1, CRASH: 2 };
+
+/** Physical surface identifiers from the core. */
+export const SURFACE = { PAVED: 0, SOIL: 1, WATER: 2 };

@@ -47,7 +47,7 @@
     <header class="topbar">
       <div class="brand">
         <img class="brand-logo" src="img/logo-small.png" width="265" height="120" alt="1923" />
-        <span class="brand-tag">Air Combat</span>
+        <span class="brand-tag">Air Combat · Simulator</span>
       </div>
       <div class="topbar-right">
         <span class="base">LTBX · Istanbul · Runway 36</span>
@@ -77,25 +77,28 @@
           <dt><kbd>X</kbd> / RMB</dt><dd>Missile</dd>
           <dt><kbd>C</kbd></dt><dd>Flares</dd>
           <dt><kbd>B</kbd></dt><dd>Brake / airbrake</dd>
+          <dt><kbd>G</kbd></dt><dd>Landing gear up / down</dd>
+          <dt><kbd>Z</kbd></dt><dd>Flaps: up / takeoff / landing</dd>
           <dt><kbd>V</kbd></dt><dd>Cockpit / chase camera</dd>
           <dt><kbd>I</kbd></dt><dd>Invert pitch</dd>
           <dt><kbd>M</kbd></dt><dd>Mute</dd>
+          <dt><kbd>N</kbd></dt><dd>Mute warning sounds</dd>
           <dt><kbd>Esc</kbd></dt><dd>Pause</dd>
           <dt><kbd>H</kbd></dt><dd>Show / hide controls</dd>
         </dl>
-        <p class="controls-note">Gamepad: left stick flies, right stick rudder, RT / LT throttle, A cannon, B missile, X / RB flares, LB brake, Y camera, Start pause. Touch screens get on-screen controls.</p>
+        <p class="controls-note">Gamepad: left stick flies, right stick rudder, RT / LT throttle, A cannon, B missile, X / RB flares, LB brake, D-pad up gear, D-pad down flaps, Y camera, Start pause. Touch screens get on-screen controls.</p>
       </details>
       <div class="settings panel">
-        <span class="setting-label">Mode</span>
-        <div class="segmented" data-setting="mode" role="radiogroup" aria-label="Game mode"></div>
-        <span class="setting-label">Realism</span>
-        <div class="segmented" data-setting="realism" role="radiogroup" aria-label="Realism"></div>
+        <span class="setting-label">Mission</span>
+        <div class="segmented" data-setting="mode" role="radiogroup" aria-label="Mission type"></div>
         <span class="setting-label">Difficulty</span>
         <div class="segmented" data-setting="difficulty" role="radiogroup" aria-label="Difficulty"></div>
         <span class="setting-label">Enemy density</span>
         <div class="segmented" data-setting="density" role="radiogroup" aria-label="Enemy density"></div>
         <span class="setting-label">Graphics</span>
         <div class="segmented" data-setting="graphics" role="radiogroup" aria-label="Graphics quality"></div>
+        <span class="setting-label">Time of day</span>
+        <div class="segmented" data-setting="time" role="radiogroup" aria-label="Time of day"></div>
         <span class="setting-label">Volume</span>
         <div class="volume"><input type="range" min="0" max="100" step="5" data-volume aria-label="Volume" /><span class="volume-value"></span></div>
       </div>
@@ -105,22 +108,22 @@
 
   <div id="pause" class="overlay hidden">
     <div class="pause-box panel">
-      <h2>Paused</h2>
+      <h2>Simulator paused</h2>
       <div class="career" data-career></div>
       <button id="resume-btn" class="primary"><span>Resume</span></button>
       <button id="restart-btn">Restart</button>
       <button id="menu-btn">Change aircraft</button>
       <div class="pause-setting">
-        <span class="setting-label">Mode</span>
-        <div class="segmented" data-setting="mode" role="radiogroup" aria-label="Game mode"></div>
-        <span class="setting-label">Realism</span>
-        <div class="segmented" data-setting="realism" role="radiogroup" aria-label="Realism"></div>
+        <span class="setting-label">Mission</span>
+        <div class="segmented" data-setting="mode" role="radiogroup" aria-label="Mission type"></div>
         <span class="setting-label">Difficulty</span>
         <div class="segmented" data-setting="difficulty" role="radiogroup" aria-label="Difficulty"></div>
         <span class="setting-label">Enemy density</span>
         <div class="segmented" data-setting="density" role="radiogroup" aria-label="Enemy density"></div>
         <span class="setting-label">Graphics</span>
         <div class="segmented" data-setting="graphics" role="radiogroup" aria-label="Graphics quality"></div>
+        <span class="setting-label">Time of day</span>
+        <div class="segmented" data-setting="time" role="radiogroup" aria-label="Time of day"></div>
         <span class="setting-label">Volume</span>
         <div class="volume"><input type="range" min="0" max="100" step="5" data-volume aria-label="Volume" /><span class="volume-value"></span></div>
       </div>

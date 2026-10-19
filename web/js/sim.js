@@ -34,6 +34,8 @@ export function createPlayerState() {
     alpha: 0, beta: 0, mach: 0, wind: [0, 0, 0], vel: [0, 0, 0], fuel: 0, flares: 0, maxFlares: 0,
     maxMissiles: 0, engineHealth: 1, controlHealth: 1, fuelLeak: 0, service: 0, inHangar: false,
     overspeed: false, lostIn: -1,
+    gear: 1, gearHealth: 1, flaps: 0, flapHealth: 1, agl: 0, surface: 0, gearCommand: true, flapCommand: 0,
+    eas: 0, gearLimit: 155, flapLimit: 140,
   };
 }
 
@@ -88,6 +90,17 @@ export function decodePlayer(p, out) {
   out.inHangar = p[PLAYER.IN_HANGAR] > 0.5;
   out.overspeed = p[PLAYER.OVERSPEED] > 0;
   out.lostIn = p[PLAYER.LOST_IN];
+  out.gear = p[PLAYER.GEAR];
+  out.gearHealth = p[PLAYER.GEAR_HEALTH];
+  out.flaps = p[PLAYER.FLAPS];
+  out.flapHealth = p[PLAYER.FLAP_HEALTH];
+  out.agl = p[PLAYER.AGL];
+  out.surface = p[PLAYER.SURFACE];
+  out.gearCommand = p[PLAYER.GEAR_COMMAND] > 0;
+  out.flapCommand = p[PLAYER.FLAP_COMMAND];
+  out.eas = p[PLAYER.EAS];
+  out.gearLimit = p[PLAYER.GEAR_LIMIT];
+  out.flapLimit = p[PLAYER.FLAP_LIMIT];
   return out;
 }
 
@@ -143,9 +156,18 @@ export class Sim {
     this.wasm.set_difficulty(level);
   }
 
-  /** Realism: 0 Arcade, 1 Simulator. */
-  setRealism(on) {
-    this.wasm.set_realism(on);
+  toggleGear() { return this.wasm.toggle_gear() > 0; }
+  cycleFlaps() { this.wasm.cycle_flaps(); }
+  terrainHeight(x, z) { return this.wasm.terrain_height(x, z); }
+  terrainSurface(x, z) { return this.wasm.terrain_surface(x, z); }
+  clearDynamicObstacles() { this.wasm.clear_obstacles(1); }
+  addObstacle(f, dynamic = false) {
+    const count = f.xz.length / 2;
+    if (count < 3 || count > 512) return;
+    const buf = this._obstacleImport = this.view(this._obstacleImport, this.wasm.obstacle_buffer_ptr(), 1027);
+    buf[0] = count; buf[1] = f.bottom ?? 0; buf[2] = f.top;
+    buf.set(f.xz, 3);
+    this.wasm.add_obstacle(dynamic ? 1 : 0);
   }
 
   /** Game mode (layout.js MODE); restarts the mission objectives. */

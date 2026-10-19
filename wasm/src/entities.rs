@@ -37,15 +37,19 @@ pub struct Airframe {
     pub stall: bool,
     /// Share of a full tank, 0..1. An empty tank flames the engine out.
     pub fuel: f32,
-    /// Whether flying burns fuel (bots fly sorties short enough to ignore it).
-    pub burns_fuel: bool,
     /// System health 0..1: engine (thrust) and flight controls (pitch / roll authority).
     pub engine_health: f32,
     pub control_health: f32,
     /// Share of the tank lost per second through a damaged tank.
     pub fuel_leak: f32,
-    /// Thrust multiplier (difficulty tuning of enemy aircraft).
-    pub thrust_scale: f32,
+    /// Physical configuration; commands and positions differ during actuator travel.
+    pub gear_position: f32,
+    pub gear_down: bool,
+    pub gear_health: f32,
+    pub flaps: f32,
+    pub flap_command: f32,
+    pub flap_health: f32,
+    pub ground_height: f32,
     /// Flight controls switch to takeoff and landing gains low and slow (the player's).
     pub low_gains: bool,
 }
@@ -70,12 +74,17 @@ impl Airframe {
             gload: 1.0,
             stall: false,
             fuel: START_FUEL,
-            burns_fuel: true,
             engine_health: 1.0,
             control_health: 1.0,
             fuel_leak: 0.0,
-            thrust_scale: 1.0,
-            low_gains: false,
+            gear_position: 0.0,
+            gear_down: false,
+            gear_health: 1.0,
+            flaps: 0.0,
+            flap_command: 0.0,
+            flap_health: 1.0,
+            ground_height: 0.0,
+            low_gains: true,
         }
     }
     pub fn stats(&self) -> Stats {
@@ -101,6 +110,8 @@ impl Airframe {
         self.engine_health = 1.0;
         self.control_health = 1.0;
         self.fuel_leak = 0.0;
+        self.gear_health = 1.0;
+        self.flap_health = 1.0;
     }
 }
 
@@ -131,10 +142,10 @@ pub struct Player {
     pub respawn: f32,
     /// Seconds stopped on the airfield; the ground crew services the aircraft at REARM_TIME.
     pub parked: f32,
-    /// Full load (Arcade or Simulator, see `Player::loadout`).
+    /// Full weapon load for this aircraft type.
     pub max_ammo: f32,
     pub max_missiles: f32,
-    /// Seconds outside the combat area (Simulator).
+    /// Seconds outside the mission area.
     pub outside: f32,
 }
 
@@ -153,7 +164,7 @@ impl DerefMut for Player {
 
 impl Player {
     /// A fresh aircraft parked at the start of runway 36.
-    pub fn on_runway(ty: usize, realism: bool) -> Player {
+    pub fn on_runway(ty: usize) -> Player {
         let s = STATS[ty];
         let dir = runway_dir();
         let start = RUNWAY_CENTER.add(dir.mul(-(RUNWAY_LENGTH * 0.5 - RUNWAY_SPAWN_INSET)));
@@ -170,38 +181,22 @@ impl Player {
             gear_pitch: 0.0,
             gear_pitch_vel: 0.0,
             settle: Q::IDENTITY,
-            ammo: 0.0,
-            missiles: 0.0,
+            ammo: s.rounds,
+            missiles: s.missiles,
             flares: s.flares,
             gun_cd: 0.0,
             missile_cd: 0.0,
             flare_cd: 0.0,
             respawn: 0.0,
             parked: 0.0,
-            max_ammo: 0.0,
-            max_missiles: 0.0,
+            max_ammo: s.rounds,
+            max_missiles: s.missiles,
             outside: 0.0,
         };
         p.af.low_gains = true;
-        p.loadout(realism, true);
+        p.af.gear_position = 1.0;
+        p.af.gear_down = true;
         p
-    }
-    /// Sets the full load for Arcade (generous gun) or Simulator (real rounds, a bomber
-    /// carries no air-to-air weapons); `fill` arms it, otherwise only trims the excess.
-    pub fn loadout(&mut self, realism: bool, fill: bool) {
-        let s = self.stats();
-        (self.max_ammo, self.max_missiles) = if realism {
-            (s.rounds, if s.air_to_air { s.missiles } else { 0.0 })
-        } else {
-            (PLAYER_AMMO, s.missiles)
-        };
-        if fill {
-            self.ammo = self.max_ammo;
-            self.missiles = self.max_missiles;
-        } else {
-            self.ammo = self.ammo.min(self.max_ammo);
-            self.missiles = self.missiles.min(self.max_missiles);
-        }
     }
     pub fn airborne(&self) -> bool {
         self.alive && !self.on_ground
@@ -217,6 +212,8 @@ impl Player {
             || self.engine_health < 1.0
             || self.control_health < 1.0
             || self.fuel_leak > 0.0
+            || self.gear_health < 1.0
+            || self.flap_health < 1.0
     }
     /// Ground crew: full weapons, fuel and systems; hull repaired.
     pub fn rearm(&mut self) {
@@ -243,6 +240,7 @@ pub enum Tactic {
     Recover = 4,
     /// Friendly bomber following its route.
     Escort = 5,
+    Return = 6,
 }
 
 #[derive(Clone, Copy)]
@@ -253,6 +251,16 @@ pub struct Bot {
     pub friendly: bool,
     pub hp: f32,
     pub max_hp: f32,
+    pub ammo: f32,
+    /// Return-to-base approach stage; completion retires the landed aircraft.
+    pub return_stage: u8,
+    pub landing: bool,
+    pub sensor_clock: f32,
+    pub sensed_track: Track,
+    pub sensed_pos: V3,
+    pub sensed_vel: V3,
+    pub sensed_valid: bool,
+    pub approach_integral: f32,
     pub fire_cd: f32,
     pub missile_cd: f32,
     pub missiles: f32,
@@ -302,17 +310,31 @@ impl Bot {
             gload: 1.0,
             stall: false,
             fuel: 0.5,
-            burns_fuel: false,
             engine_health: 1.0,
             control_health: 1.0,
             fuel_leak: 0.0,
-            thrust_scale: 1.0,
+            gear_position: 0.0,
+            gear_down: false,
+            gear_health: 1.0,
+            flaps: 0.0,
+            flap_command: 0.0,
+            flap_health: 1.0,
+            ground_height: 0.0,
             low_gains: false,
         },
         alive: false,
         friendly: false,
         hp: 0.0,
         max_hp: 1.0,
+        ammo: 0.0,
+        return_stage: 0,
+        landing: false,
+        sensor_clock: 0.0,
+        sensed_track: Track::None,
+        sensed_pos: V3::new(0.0, 0.0, 0.0),
+        sensed_vel: V3::new(0.0, 0.0, 0.0),
+        sensed_valid: false,
+        approach_integral: 0.0,
         fire_cd: 0.0,
         missile_cd: 0.0,
         missiles: 0.0,
@@ -329,8 +351,6 @@ impl Bot {
     /// A bot in level flight at `pos` heading `fwd` (flat) at `speed`.
     pub fn spawn(ty: usize, pos: V3, fwd: V3, speed: f32, hp: f32) -> Bot {
         let mut af = Airframe::new(ty, pos, Q::look(fwd, UP), fwd.mul(speed));
-        af.fuel = 0.5;
-        af.burns_fuel = false;
         af.throttle = 0.8;
         af.engine = 0.8;
         let s = STATS[ty];
@@ -339,8 +359,9 @@ impl Bot {
             alive: true,
             hp,
             max_hp: hp,
-            missiles: if ty == B2 { 0.0 } else { BOT_MISSILES },
-            flares: s.flares * 0.5,
+            ammo: s.rounds,
+            missiles: s.missiles,
+            flares: s.flares,
             waypoint: pos,
             ..Bot::DEAD
         }
@@ -367,10 +388,11 @@ pub struct Bullet {
     /// Seconds left; <= 0 marks a free slot.
     pub life: f32,
     pub owner: Owner,
+    pub rounds: f32,
 }
 
 impl Bullet {
-    pub const NONE: Bullet = Bullet { pos: V3::new(0.0, 0.0, 0.0), vel: V3::new(0.0, 0.0, 0.0), life: 0.0, owner: Owner::Player };
+    pub const NONE: Bullet = Bullet { pos: V3::new(0.0, 0.0, 0.0), vel: V3::new(0.0, 0.0, 0.0), life: 0.0, owner: Owner::Player, rounds: 0.0 };
 }
 
 /// What a missile seeker is tracking.
@@ -407,11 +429,13 @@ pub struct Missile {
     pub burn: f32,
     pub track: Track,
     pub owner: Owner,
+    /// Radar-guided SAM; air-to-air weapons have passive infrared seekers.
+    pub radar: bool,
 }
 
 impl Missile {
     pub const NONE: Missile =
-        Missile { pos: V3::new(0.0, 0.0, 0.0), vel: V3::new(0.0, 0.0, 0.0), life: 0.0, burn: 0.0, track: Track::None, owner: Owner::Player };
+        Missile { pos: V3::new(0.0, 0.0, 0.0), vel: V3::new(0.0, 0.0, 0.0), life: 0.0, burn: 0.0, track: Track::None, owner: Owner::Player, radar: false };
 }
 
 /// Infrared decoy: falls behind the aircraft and burns out.

@@ -11,6 +11,7 @@
 
 import * as THREE from 'three';
 import { AIRCRAFT } from './aircraft.js';
+import { onTimeOfDay } from './atmosphere.js';
 import { BOT } from './layout.js';
 import { wingOf } from './wing.js';
 
@@ -330,6 +331,8 @@ export class Vortices {
       map: ropeTexture(), vertexColors: true, transparent: true, depthWrite: false,
       side: THREE.DoubleSide, color: 0xf1f4f8,
     });
+    // Condensation only shows by the light it scatters: dim under the moon.
+    onTimeOfDay((night) => this.material.color.set(night ? 0x16191f : 0xf1f4f8));
     this.player = new Wake(scene, this.material);
     this.bots = [];
     /** Ropes are drawn for aircraft this close to the camera (m); quality.js may shorten it. */

@@ -78,7 +78,7 @@ function roundel() {
 function addRoundel(group, x, y, z, size) {
   const m = new THREE.Mesh(
     new THREE.CircleGeometry(size, 24),
-    new THREE.MeshBasicMaterial({ map: roundel(), transparent: true, polygonOffset: true, polygonOffsetFactor: -4 }),
+    new THREE.MeshLambertMaterial({ map: roundel(), transparent: true, polygonOffset: true, polygonOffsetFactor: -4 }),
   );
   m.rotation.x = -Math.PI / 2;
   m.position.set(x, y, z);
@@ -427,6 +427,7 @@ export class AircraftModels {
         const c = this.cfg[key] || {};
         if (c.nozzles) def.nozzles = c.nozzles;
         if (c.nozzleRadius) def.nozzleRadius = c.nozzleRadius;
+        if (c.nozzleAspect) def.nozzleAspect = c.nozzleAspect;
         if (c.eye) def.eye = c.eye;
         // Models with a modelled cockpit stay visible in cockpit view; these materials
         // (canopy glass) are hidden there so they don't fog the view.
@@ -470,40 +471,4 @@ export function instantiate(template, hostile = false) {
     });
   }
   return g;
-}
-
-/** Afterburner flame cones attached at each nozzle. */
-export function addFlames(group, def) {
-  const flames = [];
-  const mat = new THREE.MeshBasicMaterial({
-    color: 0xffa040, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false,
-  });
-  const inner = new THREE.MeshBasicMaterial({
-    color: 0x9fd0ff, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false,
-  });
-  const tail = new THREE.MeshBasicMaterial({
-    color: 0xa040ff, vertexColors: true, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false,
-  });
-  for (const [x, y, z] of def.nozzles) {
-    const cone = new THREE.Mesh(new THREE.ConeGeometry(def.nozzleRadius, 1, 14, 1, true), mat);
-    cone.geometry.translate(0, 0.5, 0);
-    cone.rotation.x = Math.PI / 2; // base at nozzle, tip trails toward +Z
-    cone.position.set(x, y, z);
-    const core = new THREE.Mesh(new THREE.ConeGeometry(def.nozzleRadius * 0.55, 1, 10, 1, true), inner);
-    core.geometry.translate(0, 0.5, 0);
-    cone.add(core);
-    // Purple tail that fades in toward the tip; its opacity follows throttle (main.js).
-    const tailGeo = new THREE.ConeGeometry(def.nozzleRadius * 1.05, 1, 14, 8, true);
-    tailGeo.translate(0, 0.5, 0);
-    const ty = tailGeo.attributes.position;
-    const rgba = new Float32Array(ty.count * 4);
-    for (let i = 0; i < ty.count; i++) {
-      rgba.set([1, 1, 1, THREE.MathUtils.smoothstep(ty.getY(i), 0.35, 1)], i * 4);
-    }
-    tailGeo.setAttribute('color', new THREE.BufferAttribute(rgba, 4));
-    cone.add(new THREE.Mesh(tailGeo, tail));
-    group.add(cone);
-    flames.push(cone);
-  }
-  return flames;
 }

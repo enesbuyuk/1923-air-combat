@@ -11,8 +11,9 @@ const cache = new Map();
 
 /**
  * @param {{template: THREE.Object3D, def: object, version: number}} entry models.js registry entry
- * @returns {{span: number, tip: number[], tipTop: number, rootX: number, rootTop: number, rootLE: number, rootTE: number}}
- *   tip: wingtip centre; tipTop / rootTop: upper wing surface height at the tip and at the root slice
+ * @returns {{span: number, tip: number[], tipTop: number, rootX: number, rootTop: number, rootLE: number, rootTE: number, tail: number[], spine: number[]}}
+ *   tip: wingtip centre; tipTop / rootTop: upper wing surface height at the tip and at the root slice;
+ *   tail: rearmost point on the centre line; spine: highest point on the centre line
  */
 export function wingOf(entry) {
   const key = `${entry.def.key}:${entry.version}`;
@@ -34,7 +35,7 @@ function measure(template, def) {
   const zs = [];
   template.traverse((o) => {
     if (!o.isMesh || !o.geometry?.attributes.position) return;
-    // Afterburner cones and other additive effect geometry are not airframe.
+    // Exhaust volumes and other additive effect geometry are not airframe.
     if (o.material?.blending === THREE.AdditiveBlending) return;
     m.multiplyMatrices(inv, o.matrixWorld);
     const pos = o.geometry.attributes.position;
@@ -64,6 +65,17 @@ function measure(template, def) {
   ty /= n || 1;
   tz /= n || 1;
 
+  // Centre line (fuselage and fins): the rearmost and the highest point.
+  const tail = [0, 0, -Infinity];
+  const spine = [0, -Infinity, 0];
+  for (let i = 0; i < xs.length; i++) {
+    if (xs[i] > half * 0.08) continue;
+    if (zs[i] > tail[2]) { tail[1] = ys[i]; tail[2] = zs[i]; }
+    if (ys[i] > spine[1]) { spine[1] = ys[i]; spine[2] = zs[i]; }
+  }
+  if (!Number.isFinite(tail[2])) tail.splice(0, 3, 0, ty, def.length / 2);
+  if (!Number.isFinite(spine[1])) spine.splice(0, 3, 0, tipTop, tz);
+
   // Root chord: a slice at 35 % of the half span, near the wing's own height.
   const rootX = half * 0.35;
   const band = 0.6 + half * 0.05;
@@ -86,5 +98,5 @@ function measure(template, def) {
   }
   // A tailplane right behind the wing would stretch the slice; real root chords stay under ~40 % of the length.
   te = Math.min(te, le + def.length * 0.4);
-  return { span: half * 2, tip: [half, ty, tz], tipTop, rootX, rootTop, rootLE: le, rootTE: te };
+  return { span: half * 2, tip: [half, ty, tz], tipTop, rootX, rootTop, rootLE: le, rootTE: te, tail, spine };
 }

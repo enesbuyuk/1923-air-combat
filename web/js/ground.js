@@ -84,7 +84,7 @@ export class GroundTargets {
       const used = alive || (hp <= 0 && (buf[o + GROUND.POS] !== 0 || buf[o + GROUND.POS + 2] !== 0));
       s.site.visible = used;
       if (!used) continue;
-      s.site.position.set(buf[o + GROUND.POS], 0, buf[o + GROUND.POS + 2]);
+      s.site.position.set(buf[o + GROUND.POS], buf[o + GROUND.POS + 1] - 3, buf[o + GROUND.POS + 2]);
       for (let k = 0; k < s.live.length; k++) s.live[k].visible = alive;
       s.scorch.visible = !alive;
       if (!alive) continue;

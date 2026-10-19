@@ -5,6 +5,8 @@
 const STORAGE_PREFIX = '1923.';
 /** Receives the graphics setting (-1 auto, else a quality tier), see bindGraphics(). */
 let graphicsHook = null;
+/** Receives the time of day (true at night), see bindTimeOfDay(). */
+let timeHook = null;
 
 const SETTINGS = {
   // Multiplies wave size and shortens the gap between waves.
@@ -18,7 +20,7 @@ const SETTINGS = {
     index: 3,
     apply: (sim, v) => sim.setEnemyDensity(v),
   },
-  // Enemy skill, accuracy, gun range and damage, health and speed.
+  // Enemy pilot skill, firing decisions and engagement distance; hardware is unchanged.
   difficulty: {
     options: [
       { label: 'Easy', value: 0 },
@@ -27,16 +29,6 @@ const SETTINGS = {
     ],
     index: 1,
     apply: (sim, v) => sim.setDifficulty(v),
-  },
-  // Simulator: no aim assist, true-size hitboxes, real ammunition, strict landing limits,
-  // no turn back at the edge of the area, slow ground crew, lethal missiles.
-  realism: {
-    options: [
-      { label: 'Arcade', value: 0 },
-      { label: 'Simulator', value: 1 },
-    ],
-    index: 0,
-    apply: (sim, v) => sim.setRealism(v),
   },
   // Game mode (layout.js MODE): endless waves, SAM-site strike, bomber escort or free flight.
   // Changing it mid-flight restarts the mission objectives.
@@ -61,6 +53,15 @@ const SETTINGS = {
     ],
     index: 0,
     apply: (_sim, v) => graphicsHook?.(v),
+  },
+  // Day or night sky and lighting (atmosphere.js); like graphics, not a core setting.
+  time: {
+    options: [
+      { label: 'Day', value: false },
+      { label: 'Night', value: true },
+    ],
+    index: 0,
+    apply: (_sim, v) => timeHook?.(v),
   },
 };
 
@@ -99,6 +100,13 @@ function select(sim, name, index) {
   document.querySelectorAll(`[data-setting="${name}"] button`).forEach((b) => {
     b.setAttribute('aria-checked', String(Number(b.dataset.i) === index));
   });
+}
+
+/** Route the time of day to `hook(night)`, starting with the saved choice. */
+export function bindTimeOfDay(hook) {
+  timeHook = hook;
+  const s = SETTINGS.time;
+  hook(s.options[s.index].value);
 }
 
 /** Route the graphics setting to `hook(value)`, starting with the saved choice. */

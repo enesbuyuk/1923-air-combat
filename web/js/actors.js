@@ -1,18 +1,12 @@
 // Scene objects for the player and enemy aircraft, driven by the core's state each frame.
 
 import * as THREE from 'three';
-import { AIRCRAFT, B2 } from './aircraft.js';
-import { instantiate, addFlames, setGear } from './models.js';
+import { AIRCRAFT } from './aircraft.js';
+import { instantiate, setGear } from './models.js';
+import { createExhaust, updateExhaust, disposeExhaust } from './exhaust.js';
 import { BOT } from './layout.js';
-
-// Exhaust colours: faint red-orange with a dim blue core at low throttle, bright
-// orange with a faintly violet white-hot core at full afterburner.
-const FLAME_LOW = new THREE.Color(0x8a3a14);
-const FLAME_HIGH = new THREE.Color(0xf6844a);
-const CORE_LOW = new THREE.Color(0x3a5a9a);
-const CORE_HIGH = new THREE.Color(0xeedcff);
-// Full-afterburner core: violet-white, blended in only near 100 % throttle.
-const CORE_MAX = new THREE.Color(0xd8b0ff);
+import { wingOf } from './wing.js';
+import { createLights, updateLights } from './navlights.js';
 
 /** Bots this badly damaged trail smoke. */
 const BOT_SMOKE_HP = 25;
@@ -32,9 +26,13 @@ export class PlayerAircraft {
     const entry = this.models.request(def.key);
     const old = this.variants[type];
     if (old?.version === entry.version) return old;
-    if (old) this.scene.remove(old.group);
+    if (old) {
+      disposeExhaust(old.exhaust);
+      this.scene.remove(old.group);
+    }
     const group = instantiate(entry.template, false);
-    const flames = addFlames(group, def);
+    const exhaust = createExhaust(group, def);
+    const lights = createLights(group, wingOf(entry), def);
     this.scene.add(group);
     const glass = [];
     if (def.cockpitHide) {
@@ -42,7 +40,7 @@ export class PlayerAircraft {
         if (o.isMesh && def.cockpitHide.test(o.material?.name || '')) glass.push(o);
       });
     }
-    return (this.variants[type] = { group, flames, glass, interior: !!def.cockpitHide, version: entry.version });
+    return (this.variants[type] = { group, exhaust, lights, glass, interior: !!def.cockpitHide, version: entry.version });
   }
 
   /** Whether the flown aircraft has a modelled cockpit to sit in. */
@@ -71,7 +69,7 @@ export class PlayerAircraft {
    * @param {boolean} cockpit cockpit view: models with an interior stay visible minus the
    *   canopy glass, the others are hidden (the HUD draws a canopy frame instead)
    */
-  update(p, cockpit) {
+  update(p, cockpit, dt = 0) {
     this.select(p.type);
     const v = this.current;
     this.group.visible = p.alive && (!cockpit || v.interior);
@@ -79,33 +77,14 @@ export class PlayerAircraft {
     this.group.position.set(p.x, p.y, p.z);
     this.group.quaternion.fromArray(p.quat);
     this.updateGear(p);
-    this.updateFlames(p);
+    updateExhaust(v.exhaust, AIRCRAFT[p.type], p.engine, p.y, dt, p.fuel > 0 || p.engine > 0.01);
   }
 
-  /** Automatic gear: down on the ground and when low and slow, up otherwise (with hysteresis). */
+  /** Gear indication follows the actuator in the core, including a jammed leg. */
   updateGear(p) {
-    if (p.onGround || (p.y < 200 && p.speed < 105)) this.gearDown = true;
-    else if (p.y > 300 || p.speed > 130) this.gearDown = false;
-    setGear(this.group, this.gearDown);
-  }
-
-  updateFlames(p) {
-    // Flames follow the spooling engine, not the throttle lever.
-    const th = p.engine;
-    const heat = THREE.MathUtils.smoothstep(th, 0.3, 1);
-    // Purple only shows at (near) full throttle.
-    const max = THREE.MathUtils.smoothstep(th, 0.85, 1);
-    const stretch = p.type === B2 ? 2 : 7;
-    for (const f of this.current.flames) {
-      const core = f.children[0];
-      const tail = f.children[1];
-      f.visible = p.alive && th > 0.05;
-      // Brighter than white at full power, so the afterburner blooms (post.js).
-      f.material.color.lerpColors(FLAME_LOW, FLAME_HIGH, heat).multiplyScalar(1 + heat * 1.5);
-      core.material.color.lerpColors(CORE_LOW, CORE_HIGH, heat).lerp(CORE_MAX, max).multiplyScalar(1 + heat * 2.5);
-      tail.material.opacity = max;
-      f.scale.set(0.7 + th * 0.4, 0.6 + th * th * stretch * (0.9 + Math.random() * 0.2), 0.7 + th * 0.4);
-    }
+    this.gearDown = p.gear > 0.97;
+    setGear(this.group, p.gear > 0.05);
+    updateLights(this.current.lights, this.gearDown);
   }
 }
 
@@ -117,6 +96,27 @@ export class BotAircraft {
     this.effects = effects;
     this.slots = [];
     this._q = new THREE.Quaternion();
+    this._v = new THREE.Vector3();
+  }
+
+  /**
+   * Break up the shown aircraft nearest `pos` (where the core reported a kill; its model
+   * still holds its last pose) through `wreckage`.
+   */
+  breakup(pos, wreckage) {
+    let best = null;
+    let bestD = 60 * 60;
+    for (const variants of this.slots) {
+      if (!variants) continue;
+      for (const m of variants) {
+        if (!m?.visible) continue;
+        const d = m.position.distanceToSquared(pos);
+        if (d < bestD) { bestD = d; best = m; }
+      }
+    }
+    if (!best) return;
+    const v = this._v.set(0, 0, -1).applyQuaternion(best.quaternion).multiplyScalar(best.userData.speed || 0);
+    wreckage.breakup(best, [v.x, v.y, v.z]);
   }
 
   model(slot, type, friendly) {
@@ -126,9 +126,13 @@ export class BotAircraft {
     const entry = this.models.request(def.key);
     const old = variants[key];
     if (old?.userData.version !== entry.version) {
-      if (old) this.scene.remove(old);
+      if (old) {
+        disposeExhaust(old.userData.exhaust);
+        this.scene.remove(old);
+      }
       const g = instantiate(entry.template, !friendly);
-      g.userData.flames = addFlames(g, def);
+      g.userData.exhaust = createExhaust(g, def);
+      g.userData.lights = createLights(g, wingOf(entry), def);
       g.userData.version = entry.version;
       g.visible = false;
       this.scene.add(g);
@@ -142,7 +146,7 @@ export class BotAircraft {
    * simulation step earlier) the pose is interpolated by `alpha` for smooth motion
    * between fixed steps.
    */
-  update(buf, count, prev = null, alpha = 1) {
+  update(buf, count, prev = null, alpha = 1, dt = 0) {
     for (let i = 0; i < count; i++) {
       const o = i * BOT.STRIDE;
       const alive = buf[o + BOT.ALIVE] > 0;
@@ -167,12 +171,11 @@ export class BotAircraft {
         this._q.fromArray(prev, o + BOT.QUAT);
         m.quaternion.copy(this._q.slerp(m.quaternion, alpha));
       }
-      setGear(m, false);
+      setGear(m, buf[o + BOT.GEAR] > 0.05);
+      updateLights(m.userData.lights, buf[o + BOT.GEAR] > 0.97);
+      m.userData.speed = buf[o + BOT.SPEED];
       const engine = buf[o + BOT.ENGINE];
-      for (const f of m.userData.flames) {
-        f.visible = engine > 0.05;
-        f.scale.set(0.8 + engine * 0.3, 0.6 + engine * engine * 3, 0.8 + engine * 0.3);
-      }
+      updateExhaust(m.userData.exhaust, AIRCRAFT[type], engine, m.position.y, dt, buf[o + BOT.FUEL] > 0 || engine > 0.01);
       const hp = buf[o + BOT.HP] / buf[o + BOT.MAX_HP];
       if (buf[o + BOT.HP] < BOT_SMOKE_HP || hp < 0.35) this.effects.damageSmoke(m.position, 0.6);
     }

@@ -10,7 +10,7 @@ pub const MAX_GROUND: usize = 12;
 
 /// Player record (one).
 pub mod player {
-    pub const STRIDE: usize = 48;
+    pub const STRIDE: usize = 60;
     pub const POS: usize = 0; // x, y, z
     pub const QUAT: usize = 3; // x, y, z, w
     pub const SPEED: usize = 7;
@@ -46,12 +46,23 @@ pub mod player {
     pub const VEL: usize = 39; // x, y, z
     pub const IN_HANGAR: usize = 42; // 1 in a hangar's service bay
     pub const OVERSPEED: usize = 43; // equivalent airspeed past the structural limit, m/s
+    pub const GEAR: usize = 45;
+    pub const GEAR_HEALTH: usize = 46;
+    pub const FLAPS: usize = 47;
+    pub const FLAP_HEALTH: usize = 48;
+    pub const AGL: usize = 49;
+    pub const SURFACE: usize = 50;
+    pub const GEAR_COMMAND: usize = 51;
+    pub const FLAP_COMMAND: usize = 52;
+    pub const EAS: usize = 53;
+    pub const GEAR_LIMIT: usize = 54;
+    pub const FLAP_LIMIT: usize = 55;
     pub const LOST_IN: usize = 44; // Simulator: seconds left to return inside the area, -1 none
 }
 
 /// Bot records (MAX_BOTS).
 pub mod bot {
-    pub const STRIDE: usize = 16;
+    pub const STRIDE: usize = 24;
     pub const POS: usize = 0;
     pub const QUAT: usize = 3;
     pub const HP: usize = 7;
@@ -62,25 +73,33 @@ pub mod bot {
     pub const TACTIC: usize = 12; // entities::Tactic
     pub const MAX_HP: usize = 13;
     pub const ENGINE: usize = 14;
+    pub const DETECTED: usize = 15;
+    pub const CONTACT_POS: usize = 16;
+    pub const GEAR: usize = 19;
+    pub const FUEL: usize = 20;
+    pub const AMMO: usize = 21;
+    pub const FLAPS: usize = 22;
 }
 
 /// Bullet records (MAX_BULLETS).
 pub mod bullet {
-    pub const STRIDE: usize = 8;
+    pub const STRIDE: usize = 10;
     pub const POS: usize = 0;
     pub const VEL: usize = 3;
     pub const LIFE: usize = 6;
+    pub const ROUNDS: usize = 8;
     pub const OWNER: usize = 7; // 0 player, 1 bot
 }
 
 /// Missile records (MAX_MISSILES).
 pub mod missile {
-    pub const STRIDE: usize = 10;
+    pub const STRIDE: usize = 12;
     pub const POS: usize = 0;
     pub const VEL: usize = 3;
     pub const LIFE: usize = 6;
     pub const TARGET: usize = 7; // Track::code: bot index, -1 none, -2 player, -3 flare, -(100 + i) ground target i
     pub const OWNER: usize = 8; // 0 player, 1 enemy
+    pub const RADAR: usize = 10;
     pub const BURN: usize = 9; // 1 while the motor burns
 }
 
@@ -93,10 +112,12 @@ pub mod flare {
 
 /// Ground target records (MAX_GROUND).
 pub mod ground {
-    pub const STRIDE: usize = 6;
+    pub const STRIDE: usize = 10;
     pub const POS: usize = 0;
     pub const HP: usize = 3;
     pub const ALIVE: usize = 4;
+    pub const DETECTED: usize = 6;
+    pub const CONTACT_POS: usize = 7;
     pub const LOCK: usize = 5; // its radar lock on the player, 0..1
 }
 

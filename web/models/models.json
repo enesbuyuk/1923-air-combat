@@ -1,11 +1,16 @@
 {
   "f16": {
     "rotation": [0, 90, 0],
+    "nozzles": [[0, -0.324, 6.94]],
+    "nozzleRadius": 0.41,
     "eye": [0, 0.62, -2.95],
     "cockpitHide": "^Glass$|-hud$"
   },
   "f22": {
     "rotation": [0, 90, 0],
+    "nozzles": [[-0.641, -0.159, 7.2], [0.641, -0.159, 7.2]],
+    "nozzleRadius": 0.45,
+    "nozzleAspect": 0.38,
     "eye": [0, 1.1, -5.3],
     "cockpitHide": "^Glass$|-hud$"
   },

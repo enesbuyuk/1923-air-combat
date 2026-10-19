@@ -13,6 +13,7 @@
 // carries them, which is how the real sheet looks.
 
 import * as THREE from 'three';
+import { ATMOSPHERE } from './atmosphere.js';
 import { humidity } from './vortex.js';
 
 const POOL = 900;
@@ -78,6 +79,7 @@ const FRAGMENT = /* glsl */ `
   #include <logdepthbuf_pars_fragment>
   uniform sampler2D map;
   uniform vec3 color;
+  uniform vec3 sunlight;
   varying vec2 vUv;
   varying float vAlpha;
   void main() {
@@ -85,7 +87,7 @@ const FRAGMENT = /* glsl */ `
     vec4 t = texture2D(map, vUv);
     float a = t.a * vAlpha;
     if (a < 0.004) discard;
-    gl_FragColor = vec4(color * t.rgb, a);
+    gl_FragColor = vec4(color * sunlight * t.rgb, a);
   }
 `;
 
@@ -104,7 +106,7 @@ export class WingVapor {
     }
     geo.instanceCount = 0;
     this.mesh = new THREE.Mesh(geo, new THREE.ShaderMaterial({
-      uniforms: { map: { value: puffTexture() }, color: { value: new THREE.Color(0xf4f6f9) } },
+      uniforms: { map: { value: puffTexture() }, color: { value: new THREE.Color(0xf4f6f9) }, sunlight: ATMOSPHERE.sunlight },
       vertexShader: VERTEX,
       fragmentShader: FRAGMENT,
       transparent: true,

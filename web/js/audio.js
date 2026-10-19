@@ -24,6 +24,7 @@ export class Sound {
   constructor() {
     this.ctx = null;
     this.muted = false;
+    this.warningsMuted = false;
     // User volume 0..1 on top of MASTER_VOLUME (see setVolume).
     this.volume = 1;
     this.pullUpBuffer = null;
@@ -196,6 +197,13 @@ export class Sound {
     return this.muted ? 0 : MASTER_VOLUME * this.volume;
   }
 
+  /** Silence the cockpit warnings (RWR, launch, pull-up) only; every new game starts with them on. */
+  toggleWarnings() {
+    this.warningsMuted = !this.warningsMuted;
+    if (this.warningsMuted) this.pullUp(false);
+    return this.warningsMuted;
+  }
+
   toggleMute() {
     this.muted = !this.muted;
     if (this.master) this.master.gain.value = this.masterGain();
@@ -353,7 +361,7 @@ export class Sound {
    * (faster as it closes).
    */
   rwr(lock, missiles, missileDist, now) {
-    if (!this.ctx) return;
+    if (!this.ctx || this.warningsMuted) return;
     this.lastRwr ??= 0;
     this.rwrPhase ??= 0;
     if (missiles > 0) {
@@ -376,6 +384,7 @@ export class Sound {
 
   /** Enemy launch: three quick descending tones. */
   launchWarning() {
+    if (this.warningsMuted) return;
     [0, 0.09, 0.18].forEach((when, i) => setTimeout(() => this.beep(1600 - i * 250, 0.07, 0.1), when * 1000));
   }
 
@@ -388,7 +397,7 @@ export class Sound {
 
   /** GPWS-style "Pull up, pull up" voice, repeated while `active` and cut off once it clears. */
   pullUp(active, now) {
-    if (!active) {
+    if (!active || this.warningsMuted) {
       this.pullUpSource?.stop();
       this.pullUpSource = null;
       this.pullUpActive = false;

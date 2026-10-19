@@ -6,12 +6,16 @@ import * as THREE from 'three';
 import { AIRCRAFT, B2 } from './aircraft.js';
 import { loadAircraftModels, setModelRenderer } from './models.js';
 import { buildWorld } from './world.js';
+import { setTimeOfDay } from './atmosphere.js';
+import { PlayerLights } from './navlights.js';
 import { Effects } from './effects.js';
+import { afterburnerShare } from './exhaust.js';
+import { Wreckage } from './wreckage.js';
 import { Hud, COLORS } from './hud.js';
 import { Sound } from './audio.js';
 import { Sim, BASE, createPlayerState } from './sim.js';
-import { BOT, GROUND, EVENT, MISSION, MODE, BUILDING_HIT, groundCode } from './layout.js';
-import { applySettings, bindSettingsUi, bindVolumeUi, bindGraphics } from './settings.js';
+import { BOT, GROUND, EVENT, MISSION, MODE, groundCode } from './layout.js';
+import { applySettings, bindSettingsUi, bindVolumeUi, bindGraphics, bindTimeOfDay } from './settings.js';
 import { Controls } from './input.js';
 import { GForce } from './gforce.js';
 import { CameraRig } from './camera.js';
@@ -58,7 +62,12 @@ function progress(fraction, text) {
 // Renderer and shared objects
 // ---------------------------------------------------------------------------
 
-const renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true });
+// The scene is drawn into PostFx's own multisampled target and only a full-screen quad
+// reaches the canvas, so the canvas needs no antialiasing, depth or stencil of its own
+// (a multisampled canvas cost a full-screen resolve every frame for nothing).
+const renderer = new THREE.WebGLRenderer({
+  antialias: false, depth: false, stencil: false, powerPreference: 'high-performance', logarithmicDepthBuffer: true,
+});
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true;
@@ -83,6 +92,7 @@ let selected = 0;
 let sim;
 let world;
 let effects;
+let wreckage;
 let airflow;
 let vortices;
 const vapor = new WingVapor();
@@ -94,6 +104,7 @@ let lastMach = 0;
 let player;
 let bots;
 let groundTargets;
+let playerLights;
 let lastAmmo = 0;
 let gunSoundCooldown = 0;
 /**
@@ -139,9 +150,17 @@ function onKey(code) {
     return;
   }
   if (state !== 'play') return;
+  if (gforce.incapacitated && (code === 'KeyX' || code === 'KeyG' || code === 'KeyZ')) return;
   switch (code) {
     case 'KeyX':
       controls.missileQueued = true;
+      break;
+    case 'KeyG':
+      if (!sim.toggleGear()) hud.message('Gear retraction inhibited on the ground', COLORS.WARN, 2);
+      break;
+    case 'KeyZ':
+      sim.cycleFlaps();
+      hud.message(`Flaps commanded ${Math.round(sim.player().flapCommand * 100)}%`, COLORS.PRIMARY, 2);
       break;
     case 'KeyV':
       rig.cockpit = !rig.cockpit;
@@ -155,6 +174,9 @@ function onKey(code) {
       break;
     case 'KeyM':
       hud.message(sound.toggleMute() ? 'Sound off' : 'Sound on');
+      break;
+    case 'KeyN':
+      hud.message(sound.toggleWarnings() ? 'Warning sounds off' : 'Warning sounds on');
       break;
   }
 }
@@ -180,6 +202,7 @@ function resetSim() {
   accumulator = 0;
   prevValid = false;
   replay.clear();
+  gforce.reset();
 }
 
 function selectAircraft(i) {
@@ -191,6 +214,7 @@ function selectAircraft(i) {
 
 function startGame() {
   sound.start();
+  sound.warningsMuted = false;
   resetSim();
   controls.reset();
   lastAmmo = 0;
@@ -250,40 +274,6 @@ $('fs-btn').onclick = () => {
 // Simulation
 // ---------------------------------------------------------------------------
 
-/** Depth (m) of the airframe below its origin with the wings level: the wheels. */
-const BELLY_DEPTH = 2.5;
-
-/**
- * Sweep the player from `from` to where the step left it, in radius-sized hops so fast
- * aircraft can't skip through a building between steps, and report the first hit.
- */
-function checkBuildings(from) {
-  const p = sim.player();
-  if (!p.alive) return;
-  const r = AIRCRAFT[p.type].hitRadius;
-  // The hit radius spans the wings: level, the airframe only reaches the wheels below its
-  // origin; banked, the low wingtip dips by the radius times the sine of the bank.
-  const [qx, , qz] = p.quat;
-  const upY = 1 - 2 * (qx * qx + qz * qz);
-  const below = Math.max(BELLY_DEPTH, r * Math.sqrt(Math.max(0, 1 - upY * upY)));
-  const dx = p.x - from.x;
-  const dy = p.y - from.y;
-  const dz = p.z - from.z;
-  const hops = Math.max(1, Math.ceil(Math.hypot(dx, dy, dz) / r));
-  for (let i = 1; i <= hops; i++) {
-    const t = i / hops;
-    const x = from.x + dx * t;
-    const y = from.y + dy * t;
-    const z = from.z + dz * t;
-    const hit = world.collide(x, y, z, r, below);
-    if (!hit) continue;
-    const result = sim.buildingHit(x, y, z, hit);
-    if (result === BUILDING_HIT.CRASH) hud.message('CRASHED INTO A BUILDING', COLORS.DANGER, 3);
-    else if (result === BUILDING_HIT.SCRAPE) hud.message('Scraped a building', COLORS.WARN, 2);
-    return;
-  }
-}
-
 const eventPos = new THREE.Vector3();
 
 /** One core event; `e` is reused by Sim.forEachEvent, so nothing here keeps it. */
@@ -294,6 +284,7 @@ function handleEvent(e) {
     case EVENT.BOT_DESTROYED: {
       const b2 = e.extra === B2;
       effects.explosion(pos, b2 ? 2.6 : 1.4);
+      bots.breakup(pos, wreckage);
       sound.explosion(distance);
       hud.message(b2 ? 'B-2 DESTROYED  +500' : 'ENEMY DESTROYED  +100', COLORS.PRIMARY, 2.5);
       const promoted = career.addKill();
@@ -316,6 +307,7 @@ function handleEvent(e) {
       // The crash plays live first; the kill cam then replays the last seconds and
       // shows the explosion again at the right moment.
       effects.explosion(pos, 1.8);
+      wreckage.breakup(player.group, sim.player().vel);
       sound.explosion(0);
       replay.start(sim.time(), pos.clone());
       break;
@@ -398,7 +390,7 @@ function missionMessage(code) {
  * to the next frame and used to interpolate the rendered poses.
  */
 function simulate(frameDt) {
-  controls.update(frameDt, gforce.unconscious);
+  controls.update(frameDt, gforce.incapacitated);
   const input = controls.consume();
   sim.setInput(input);
   accumulator += frameDt;
@@ -418,7 +410,8 @@ function simulate(frameDt) {
     prevBots.set(botBuf);
     prevValid = true;
     sim.step(FIXED_STEP);
-    if (prevPlayer.alive) checkBuildings(prevPlayer);
+    const pilot = sim.player();
+    gforce.update(pilot.gLoad, AIRCRAFT[pilot.type].gOnset, pilot.alive, FIXED_STEP);
     // The core clears events on every step.
     sim.forEachEvent(handleEvent);
     replay.record(sim.time(), sim.playerRaw(), sim.bots(), sim.missiles());
@@ -515,8 +508,8 @@ function hudData(p, stats, dt) {
   let n = 0;
   for (let i = 0; i < sim.maxBots; i++) {
     const o = i * BOT.STRIDE;
-    if (buf[o + BOT.ALIVE] <= 0) continue;
-    botPos.fromArray(buf, o + BOT.POS);
+    if (buf[o + BOT.ALIVE] <= 0 || buf[o + BOT.DETECTED] === 0) continue;
+    botPos.fromArray(buf, o + BOT.CONTACT_POS);
     const locked = i === stats.lockTarget;
     const b2 = (buf[o + BOT.TYPE] | 0) === B2;
     const friendly = buf[o + BOT.FRIENDLY] > 0;
@@ -532,15 +525,15 @@ function hudData(p, stats, dt) {
     t.locked = locked;
     t.b2 = b2;
     t.friendly = friendly;
-    t.label = friendly ? 'ESCORT' : b2 ? 'B-2' : '';
+    t.label = buf[o + BOT.DETECTED] < 0 ? 'MEM' : friendly ? 'ESCORT' : b2 ? 'B-2' : '';
     hudRadar[n] = r;
     hudTargets[n++] = t;
   }
   const gbuf = sim.ground();
   for (let i = 0; i < sim.maxGround; i++) {
     const o = i * GROUND.STRIDE;
-    if (gbuf[o + GROUND.ALIVE] <= 0) continue;
-    botPos.fromArray(gbuf, o + GROUND.POS);
+    if (gbuf[o + GROUND.ALIVE] <= 0 || gbuf[o + GROUND.DETECTED] === 0) continue;
+    botPos.fromArray(gbuf, o + GROUND.CONTACT_POS);
     const locked = stats.lockTarget === groundCode(i);
     const r = hudContact(n);
     r.dx = botPos.x - p.x;
@@ -552,7 +545,7 @@ function hudData(p, stats, dt) {
     t.dist = Math.hypot(botPos.x - p.x, botPos.y - p.y, botPos.z - p.z);
     t.locked = locked;
     t.b2 = t.friendly = false;
-    t.label = 'SAM';
+    t.label = gbuf[o + GROUND.DETECTED] < 0 ? 'MEM' : 'SAM';
     hudRadar[n] = r;
     hudTargets[n++] = t;
   }
@@ -578,6 +571,9 @@ function hudData(p, stats, dt) {
   s.gearDown = player.gearDown;
   s.airbrake = controls.brake && !p.onGround;
   s.gStress = gforce.stress;
+  s.gNegative = gforce.negative > gforce.positive;
+  s.gUnconscious = gforce.unconscious;
+  s.gRecovering = gforce.recoveryRemaining > 0;
   s.rank = career.rank.short;
   s.careerKills = career.kills;
   s.killcam = replay.playing;
@@ -610,27 +606,30 @@ function updateCockpit(p, stats, dt, frameDt, now) {
   if (stats.lockTarget !== -1) sound.lockTone(stats.lockProgress, stats.lockProgress >= 1, now / 1000);
   if (p.alive) sound.rwr(stats.rwrLock, stats.missileWarn, stats.missileDist, now / 1000);
   // Same condition as the HUD's PULL UP warning: low and sinking fast.
-  sound.pullUp(p.alive && !p.onGround && p.y < 300 && p.verticalSpeed < -15, now / 1000);
+  sound.pullUp(p.alive && !p.onGround && p.agl < 300 && p.verticalSpeed < -15, now / 1000);
   if (p.alive && p.hp / p.maxHp < 0.5) effects.damageSmoke(player.group.position, 1 - p.hp / p.maxHp);
   // Wider FOV at speed for a sense of velocity.
   const fov = (rig.cockpit ? 72 : 65) + Math.min(10, p.speed / 40);
   camera.fov += (fov - camera.fov) * Math.min(1, dt * 2);
   camera.updateProjectionMatrix();
-  gforce.update(p.gLoad, AIRCRAFT[p.type].gOnset, p.alive, frameDt);
+  gforce.render();
   hud.draw(hudData(p, stats, frameDt));
 }
 
 /** Kill cam: show the recorded last seconds before the player went down, in slow motion. */
 function renderKillcam(live, frameDt) {
+  // The live crash's wreckage would be lying there before the replayed one is made.
+  if (replay.elapsed === 0) wreckage.clear();
   const { frame: f, boom, dead } = replay.advance(frameDt);
   if (boom) {
     effects.explosion(replay.deathPos, 1.8);
+    wreckage.breakup(player.group, f.player.vel);
     sound.explosion(0);
   }
   // f.player is the replay's own copy, decoded afresh on every advance(): safe to edit.
   if (dead) f.player.alive = false;
-  player.update(f.player, false);
-  bots.update(f.bots, sim.maxBots);
+  player.update(f.player, false, frameDt);
+  bots.update(f.bots, sim.maxBots, null, 1, frameDt);
   effects.updateTracers(sim.bullets(), 0);
   effects.updateMissiles(f.missiles, sim.maxMissiles);
   rig.killcamView(f.player, AIRCRAFT[f.player.type], dead ? replay.deathPos : null, frameDt);
@@ -720,12 +719,20 @@ function applyQuality({ ratio, settings }) {
 /**
  * Compile every material in the scene now (missiles, explosions, tracers, vapor and the
  * rest that are hidden in the menu), so their first appearance in a fight does not stall
- * a frame. The scene is compiled into the post-processing target, as RenderPass renders
+ * a frame. The scene is compiled into the post-processing target, as PostFx renders
  * it, so the programs match the ones used later.
  */
 async function precompile() {
   let ready = null;
-  renderer.setRenderTarget(post.composer.readBuffer);
+  // compile() only walks visible objects; show the hidden ones (the missiles and their
+  // plumes wait hidden in a pool) for the synchronous part of it.
+  const hidden = [];
+  scene.traverse((o) => {
+    if (o.visible) return;
+    hidden.push(o);
+    o.visible = true;
+  });
+  renderer.setRenderTarget(post.target);
   try {
     // Without parallel compilation compileAsync only adds polling (and a console warning).
     const parallel = renderer.compileAsync && renderer.extensions.has('KHR_parallel_shader_compile');
@@ -733,6 +740,7 @@ async function precompile() {
     // The vapor joins the aircraft model on its first update.
     renderer.compile(vapor.mesh, camera, scene);
   } finally {
+    for (const o of hidden) o.visible = false;
     renderer.setRenderTarget(null);
   }
   await ready;
@@ -761,9 +769,10 @@ function frame(now) {
     renderKillcam(live, frameDt);
   } else {
     const p = interpolatedPlayer(live, alpha);
-    player.update(p, state === 'play' && rig.cockpit);
+    player.update(p, state === 'play' && rig.cockpit, state === 'pause' ? 0 : frameDt);
+    playerLights.update(player.group, player.current.lights, player.gearDown, p.alive);
     if (state !== 'pause') {
-      bots.update(sim.bots(), sim.maxBots, previousBots(), alpha);
+      bots.update(sim.bots(), sim.maxBots, previousBots(), alpha, frameDt);
       effects.updateTracers(sim.bullets(), sim.maxBullets);
       effects.updateMissiles(sim.missiles(), sim.maxMissiles);
     }
@@ -784,6 +793,7 @@ function frame(now) {
     effects.updateFlares(sim.flares(), sim.maxFlares);
     groundTargets.update(sim.ground(), live, frameDt);
     effects.update(frameDt);
+    wreckage.update(frameDt);
   }
   const lightMoved = world.follow(player.group.position);
 
@@ -805,8 +815,9 @@ const nozzleEnd = new THREE.Vector3();
 function exhaustShimmer(p) {
   if (!p.alive || p.engine < 0.1) return;
   const def = AIRCRAFT[p.type];
-  const length = 10 + p.engine * 30;
-  const strength = THREE.MathUtils.smoothstep(p.engine, 0.1, 1);
+  const burn = afterburnerShare(def, p.engine);
+  const length = 6 + p.engine * 12 + burn * 10;
+  const strength = THREE.MathUtils.smoothstep(p.engine, 0.1, 0.8) * (0.15 + p.engine * 0.25 + burn * 0.6);
   player.group.updateMatrixWorld();
   camera.updateMatrixWorld();
   for (let i = 0; i < def.nozzles.length; i++) {
@@ -840,6 +851,7 @@ async function boot() {
     // Independent downloads: fetch the core and the model catalogue in parallel.
     const [loadedSim, models] = await Promise.all([Sim.load(), loadAircraftModels()]);
     sim = loadedSim;
+    rig.terrainHeight = (x, z) => sim.terrainHeight(x, z);
     models.onProgress = (key, loaded, total) => progress(0.4 + 0.35 * loaded / (total || 1));
     // Only the preselected aircraft's GLB now; the rest download when picked or met in the air.
     progress(0.4, `Model: ${AIRCRAFT[selected].name}`);
@@ -848,21 +860,24 @@ async function boot() {
       if (menu && key === AIRCRAFT[selected].key) menu.show(selected);
     };
     progress(0.75, 'Loading Istanbul satellite imagery…');
-    world = buildWorld(scene, renderer);
+    world = buildWorld(scene, renderer, sim);
     effects = new Effects(scene, sim.maxBullets, sim.maxMissiles);
+    wreckage = new Wreckage(scene, effects, sim);
     airflow = new Airflow(scene);
     clouds = new Clouds(scene);
     post = new PostFx(renderer, scene, camera);
     vortices = new Vortices(scene, models);
     player = new PlayerAircraft(scene, models);
+    playerLights = new PlayerLights(scene);
     bots = new BotAircraft(scene, models, effects);
     groundTargets = new GroundTargets(scene, sim.maxGround);
     menu = new Menu(models, selectAircraft, startGame);
     bindSettingsUi(sim);
     bindVolumeUi(sound);
     bindGraphics((mode) => quality.setMode(mode));
+    bindTimeOfDay(setTimeOfDay);
     selectAircraft(selected);
-    await waitForTiles(world.tiles);
+    await Promise.all([waitForTiles(world.tiles), world.ready]);
     try {
       await precompile();
     } catch (e) {

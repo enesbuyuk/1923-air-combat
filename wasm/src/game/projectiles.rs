@@ -13,10 +13,6 @@ use crate::entities::*;
 use crate::layout::{event, MAX_BOTS, MAX_FLARES};
 use crate::math::{clamp, segment_distance, segment_hits_sphere, V3, UP};
 
-/// Arcade: bullets use a fatter hitbox against bots so the cannon feels fair at speed.
-/// Simulator: the airframe's own size.
-const BOT_HITBOX_SCALE: f32 = 2.2;
-
 /// A live bot's hitbox, packed tight so every round can test them all without walking
 /// the full `Bot` records (cache-friendly broadphase).
 #[derive(Clone, Copy, Default)]
@@ -30,16 +26,22 @@ struct Hull {
 impl Game {
     /// Reuses the next free slot, round-robin from the last one; the shot is dropped when
     /// the pool is full.
+    #[cfg(test)]
     pub(super) fn spawn_bullet(&mut self, pos: V3, vel: V3, owner: Owner) {
+        self.spawn_rounds(pos, vel, owner, ROUNDS_PER_SHOT);
+    }
+
+    pub(super) fn spawn_rounds(&mut self, pos: V3, vel: V3, owner: Owner, rounds: f32) -> bool {
         let n = self.bullets.len();
         for k in 0..n {
             let i = (self.bullet_cursor + k) % n;
             if self.bullets[i].life <= 0.0 {
-                self.bullets[i] = Bullet { pos, vel, life: BULLET_LIFE, owner };
+                self.bullets[i] = Bullet { pos, vel, life: BULLET_LIFE, owner, rounds };
                 self.bullet_cursor = (i + 1) % n;
-                return;
+                return true;
             }
         }
+        false
     }
 
     /// First live bot on the given side whose hull the segment `a`-`b` passes through.
@@ -55,12 +57,11 @@ impl Game {
     }
 
     pub(super) fn update_bullets(&mut self, dt: f32) {
-        let hitbox = if self.realism { 1.0 } else { BOT_HITBOX_SCALE };
         // Bots do not move while the rounds fly this substep: pack their hulls once.
         let mut hulls = [Hull::default(); MAX_BOTS];
         let mut count = 0;
         for (i, b) in self.bots.iter().enumerate().filter(|(_, b)| b.alive) {
-            hulls[count] = Hull { pos: b.pos, radius: b.stats().radius * hitbox, friendly: b.friendly, index: i };
+            hulls[count] = Hull { pos: b.pos, radius: b.stats().radius, friendly: b.friendly, index: i };
             count += 1;
         }
         let hulls = &hulls[..count];
@@ -70,15 +71,20 @@ impl Game {
                 continue;
             }
             let end = b.pos.add(b.vel.mul(dt));
+            if end.y < self.environment.height(end.x, end.z) || !self.environment.clear_line(b.pos, end) {
+                self.bullets[bi].life = 0.0;
+                continue;
+            }
+            let damage = BULLET_DAMAGE * b.rounds / ROUNDS_PER_SHOT;
             let hit = match b.owner {
                 Owner::Player => {
                     if let Some(i) = self.bot_on_segment(hulls, b.pos, end, false) {
                         let at = self.bots[i].pos;
-                        self.damage_bot(i, BULLET_DAMAGE, at);
+                        self.damage_bot(i, damage, at);
                         true
                     } else if let Some(i) = self.ground_on_segment(b.pos, end, GROUND_TARGET_RADIUS) {
                         let at = self.ground[i].pos;
-                        self.damage_ground(i, BULLET_DAMAGE, at);
+                        self.damage_ground(i, damage, at);
                         true
                     } else {
                         false
@@ -86,7 +92,7 @@ impl Game {
                 }
                 Owner::Bot => {
                     let p = &self.player;
-                    let dmg = self.difficulty().damage;
+                    let dmg = damage;
                     if p.alive && segment_hits_sphere(b.pos, end, p.pos, p.stats().radius) {
                         let at = p.pos;
                         self.damage_player(dmg, at, true);
@@ -117,9 +123,15 @@ impl Game {
     /// Fires a missile; dropped when the pool is full. A missile fired without a track flies
     /// ballistic under its motor.
     pub(super) fn launch_missile(&mut self, pos: V3, vel: V3, track: Track, owner: Owner) -> bool {
+        self.launch_weapon(pos, vel, track, owner, false)
+    }
+    pub(super) fn launch_radar_missile(&mut self, pos: V3, vel: V3, track: Track, owner: Owner) -> bool {
+        self.launch_weapon(pos, vel, track, owner, true)
+    }
+    fn launch_weapon(&mut self, pos: V3, vel: V3, track: Track, owner: Owner, radar: bool) -> bool {
         match self.missiles.iter_mut().find(|m| m.life <= 0.0) {
             Some(m) => {
-                *m = Missile { pos, vel, life: MISSILE_LIFE, burn: MISSILE_BURN, track, owner };
+                *m = Missile { pos, vel, life: MISSILE_LIFE, burn: MISSILE_BURN, track, owner, radar };
                 true
             }
             None => false,
@@ -158,12 +170,13 @@ impl Game {
             m.life -= dt;
             let start = m.pos;
             self.missile_physics(&mut m, dt);
-            let detonated = self.missile_fuse(&m, start);
+            let blocked = m.pos.y < self.environment.height(m.pos.x, m.pos.z) || !self.environment.clear_line(start, m.pos);
+            let detonated = !blocked && self.missile_fuse(&m, start);
             if detonated {
                 m.life = 0.0;
-            } else if m.pos.y < 0.0 {
+            } else if blocked {
                 m.life = 0.0;
-                self.event(event::GROUND_IMPACT, m.pos.flat(), 0.0);
+                self.event(event::GROUND_IMPACT, m.pos, 0.0);
             } else if m.life <= 0.0 {
                 // Self-destruct at the end of its flight time.
                 self.event(event::GROUND_IMPACT, m.pos, 0.0);
@@ -187,7 +200,7 @@ impl Game {
         match self.track_state(m.track) {
             Some((tp, tv)) => {
                 let r = tp.sub(m.pos);
-                if r.norm().dot(dir) < MISSILE_GIMBAL_DEG.to_radians().cos() {
+                if r.norm().dot(dir) < MISSILE_GIMBAL_DEG.to_radians().cos() || !self.environment.clear_line(m.pos, tp) {
                     // Target left the seeker's field of view.
                     m.track = Track::None;
                 } else {
@@ -263,7 +276,7 @@ impl Game {
             }
             Owner::Bot => {
                 let p = &self.player;
-                let dmg = if self.realism { SIM_MISSILE_DAMAGE } else { BOT_MISSILE_DAMAGE[self.difficulty] };
+                let dmg = MISSILE_DAMAGE;
                 if p.alive {
                     if let Some(k) = Self::fuse_hit(start, m.pos, p.pos, p.stats().radius, fuse) {
                         self.damage_player(dmg * k, m.pos, true);
@@ -293,7 +306,7 @@ impl Game {
         let heading = vel.norm();
         for mi in 0..self.missiles.len() {
             let m = self.missiles[mi];
-            if m.life <= 0.0 || m.track != from {
+            if m.life <= 0.0 || m.track != from || m.radar {
                 continue;
             }
             let to_missile = m.pos.sub(pos);
@@ -322,7 +335,7 @@ impl Game {
             f.vel = f.vel.mul(drag);
             f.vel.y -= GRAVITY * 0.6 * dt;
             f.pos = f.pos.add(f.vel.mul(dt));
-            if f.pos.y < 0.0 {
+            if f.pos.y < self.environment.height(f.pos.x, f.pos.z) {
                 f.life = 0.0;
             }
         }

@@ -15,9 +15,7 @@ use crate::entities::*;
 use crate::layout::{event, MAX_BOTS};
 use crate::math::{clamp, V3, RIGHT, UP};
 
-const BOT_BULLET_SPEED: f32 = 950.0;
-const B2_TAIL_GUN_SPEED: f32 = 900.0;
-const B2_TAIL_GUN_RANGE: f32 = 900.0;
+const BOT_BULLET_SPEED: f32 = PLAYER_BULLET_SPEED;
 const PURSUIT_RANGE: f32 = 9000.0;
 /// Bots only hunt a player above this height (no strafing the runway).
 const HUNT_MIN_ALTITUDE: f32 = 40.0;
@@ -109,14 +107,57 @@ fn pull_out_height(b: &Bot) -> f32 {
     radius * (1.0 - dive.cos()) + sink * RECOVERY_REACTION / stiff
 }
 
+/// On final, command a shallow descent and small bank corrections. Combat pursuit
+/// rolls the lift vector toward its aim point, which is unsafe for a point below
+/// the nose during a landing approach.
+fn landing_controls(b: &mut Bot, dt: f32) -> (f32, f32) {
+    let runway = runway_dir();
+    let heading = b.fwd().flat().norm();
+    let error = wrap(runway.x.atan2(-runway.z) - heading.x.atan2(-heading.z));
+    let right = b.q.rotate(RIGHT);
+    let up = b.q.rotate(UP);
+    let bank = (-right.y).atan2(up.y);
+    let cross_track = RUNWAY_CENTER.sub(b.pos).dot(runway.cross(UP));
+    let threshold = RUNWAY_CENTER.sub(runway.mul(RUNWAY_LENGTH * 0.5 - 50.0));
+    let remaining = threshold.sub(b.pos).dot(runway);
+    let lookahead = clamp(remaining * 0.3, 700.0, 1500.0);
+    let course_error = wrap(error + cross_track.atan2(lookahead));
+    let target_bank = clamp(course_error * 3.0, -0.3, 0.3);
+    let roll = clamp((target_bank - bank) * 2.0, -0.4, 0.4);
+    let agl = b.pos.y - b.ground_height;
+    let path_height = remaining.max(0.0) * 0.052 + GEAR_HEIGHT;
+    let sink = if agl < 20.0 { -clamp((agl - 1.0) * 0.25, 1.2, 3.0) }
+        else { clamp(-b.vel.flat().len() * 0.052 + (path_height - agl) * 0.15, -8.0, 0.0) };
+    let gain = 0.025 + 0.075 * clamp((LOW_GAIN_HEIGHT - agl) / (LOW_GAIN_HEIGHT - GEAR_HEIGHT), 0.0, 1.0);
+    // Do not carry the glide-path integral into the flare: its nose-up bias would
+    // keep the aircraft floating along the runway after the descent was arrested.
+    if agl < 20.0 { b.approach_integral *= (-2.0 * dt).exp(); }
+    else { b.approach_integral = clamp(b.approach_integral + (sink - b.vel.y) * 0.004 * dt, -0.2, 0.2); }
+    let pitch = clamp((sink - b.vel.y) * gain + b.approach_integral, -0.4, 0.6);
+    (pitch, roll)
+}
+
+fn return_controls(b: &mut Bot, to_waypoint: V3, dt: f32) -> (f32, f32) {
+    let fwd = b.fwd();
+    let error = wrap(to_waypoint.x.atan2(-to_waypoint.z) - fwd.x.atan2(-fwd.z));
+    let bank = (-b.q.rotate(RIGHT).y).atan2(b.q.rotate(UP).y);
+    let bank_command = clamp(error * 3.0, -0.95, 0.95);
+    let roll = clamp((bank_command - bank) * 2.0, -0.8, 0.8);
+    let agl = b.pos.y - b.ground_height;
+    let descent = if agl > 350.0 { -15.0 } else if b.return_stage == 1 && agl > 100.0 { -10.0 } else { -5.0 };
+    let vertical = clamp(to_waypoint.y * 0.08, descent, 5.0);
+    b.approach_integral = clamp(b.approach_integral + (vertical - b.vel.y) * 0.003 * dt, -0.2, 0.2);
+    let pitch = clamp((vertical - b.vel.y) * 0.025 + b.approach_integral, -0.3, 0.4);
+    (pitch, roll)
+}
+
 impl Game {
     pub(super) fn spawn_wave(&mut self) {
         self.wave += 1;
         let wave = self.wave as f32;
         let base = 2.0 + wave * 3.0;
-        let count = ((base * self.density * self.mode_wave_scale()).round() as usize).clamp(1, MAX_BOTS);
+        let count = ((base * self.density * self.mode_wave_scale() * self.difficulty().wave_scale).round() as usize).clamp(1, MAX_BOTS);
         let center = self.wave_center();
-        let diff = self.difficulty();
         let mut spawned = 0;
         for slot in 0..MAX_BOTS {
             if spawned == count {
@@ -136,15 +177,10 @@ impl Game {
                 BOT_FIGHTERS[(self.rng.next() * 3.0) as usize % 3]
             };
             let is_b2 = ty == B2;
-            let speed = if is_b2 { 170.0 } else { self.rng.range(200.0, 240.0) + wave * 6.0 };
-            let hp = diff.hp * if is_b2 { 120.0 } else { 40.0 + wave * 4.0 };
-            let mut b = Bot::spawn(ty, pos, fwd, speed, hp);
-            if !is_b2 {
-                let cap = if self.difficulty == 0 { BOT_MISSILES_EASY } else { BOT_MISSILES };
-                b.missiles = (wave - 1.0).clamp(0.0, cap);
-            }
+            let speed = if is_b2 { 170.0 } else { self.rng.range(200.0, 240.0) };
+            let mut b = Bot::spawn(ty, pos, fwd, speed, STATS[ty].hp);
             b.fire_cd = self.rng.range(0.5, 2.0);
-            b.missile_cd = self.rng.range(4.0, 10.0);
+            b.missile_cd = self.rng.range(0.5, 1.25) * self.difficulty().missile_interval;
             b.jink = self.rng.range(0.0, 10.0);
             b.break_side = if self.rng.next() < 0.5 { -1.0 } else { 1.0 };
             self.bots[slot] = b;
@@ -160,29 +196,63 @@ impl Game {
 
     pub(super) fn update_bots(&mut self, dt: f32) {
         let skill = self.skill();
-        let mut shots = std::mem::take(&mut self.shots);
         for i in 0..MAX_BOTS {
             if !self.bots[i].alive {
                 continue;
             }
             let mut b = self.bots[i];
             b.jink += dt;
-            b.fire_cd -= dt;
+            b.fire_cd = (b.fire_cd - dt).max(-dt);
             b.missile_cd -= dt;
             b.flare_cd -= dt;
-            let quarry = self.pick_quarry(&b);
+            b.sensor_clock -= dt;
+            if b.sensor_clock <= 0.0 {
+                let seen = self.pick_quarry(&b);
+                b.sensed_track = seen.track; b.sensed_pos = seen.pos; b.sensed_vel = seen.vel; b.sensed_valid = seen.huntable;
+                b.sensor_clock = super::sensors::SCAN_INTERVAL;
+            }
+            let quarry = Quarry { track: b.sensed_track, pos: b.sensed_pos, vel: b.sensed_vel, huntable: b.sensed_valid };
             let intent = self.decide(&mut b, i, &quarry, skill);
-            let (pitch, roll) = autopilot(&b.af, intent.dir, intent.max_pull, max_bank(&b));
+            let (pitch, roll) = if b.landing && b.return_stage >= 2 { landing_controls(&mut b, dt) }
+                else if b.landing { return_controls(&mut b, intent.dir, dt) }
+                else { autopilot(&b.af, intent.dir, intent.max_pull, max_bank(&b)) };
             let inp = Input { pitch, roll, throttle: intent.throttle, brake: intent.brake, ..Input::default() };
             let air = self.weather.air_at(b.pos.y);
-            aero::fly(&mut b.af, &inp, air, 0.0, dt);
-            if b.pos.y <= 0.0 {
+            let from = b.pos;
+            b.ground_height = self.environment.height(b.pos.x, b.pos.z);
+            aero::fly(&mut b.af, &inp, air, self.weather.roll, dt);
+            b.hp -= b.overspeed() * OVERSPEED_DAMAGE * dt;
+            if let Some((at, nx, nz, depth)) = self.obstacle_contact(from, &b.af) {
+                if b.speed > BUILDING_CRASH_SPEED { b.hp = 0.0; }
+                else {
+                    b.pos = at.add(V3::new(nx, 0.0, nz).mul(depth + 0.5));
+                    b.hp -= 5.0 + b.speed * 0.8;
+                    b.vel = V3::default();
+                }
+            }
+            let ground = self.environment.height(b.pos.x, b.pos.z);
+            let contact_height = if b.gear_position > 0.95 { super::flight::wheels_down_height(b.fwd().y) } else { 0.8 };
+            let sink = b.vel.y - (ground - b.ground_height) / dt;
+            if b.pos.y <= ground + contact_height || b.hp <= 0.0 {
+                // A returned aircraft is removed only after a safe, configured runway
+                // touchdown. It gets no free fuel, ammunition or in-flight repair.
+                let landing_damage = (-sink - HARD_LANDING_SINK).max(0.0) * HARD_LANDING_DAMAGE;
+                let safe = b.landing && self.environment.surface(b.pos.x, b.pos.z) != crate::environment::Surface::Water
+                    && b.gear_position > 0.97 && b.gear_health > 0.25 && sink > -MAX_SINK_RATE
+                    && b.q.rotate(UP).y > MIN_LANDING_UP && b.fwd().y > MIN_LANDING_NOSE
+                    && b.vel.flat().len() < MAX_TOUCHDOWN * b.stats().stall_speed && b.hp > landing_damage;
+                if safe {
+                    b.hp -= landing_damage;
+                    b.alive = false;
+                    self.bots[i] = b;
+                    continue;
+                }
                 self.bots[i] = b;
-                self.destroy_bot(i, b.pos.flat(), !b.friendly);
+                self.destroy_bot(i, V3::new(b.pos.x, ground, b.pos.z), !b.friendly);
                 continue;
             }
             if !b.friendly {
-                self.bot_gunnery(&mut b, &quarry, skill, &mut shots);
+                self.bot_gunnery(&mut b, &quarry);
                 self.bot_missiles(&mut b, &quarry, skill, dt);
             }
             if b.tactic == Tactic::Evade {
@@ -190,21 +260,17 @@ impl Game {
             }
             self.bots[i] = b;
         }
-        for &(pos, vel) in &shots {
-            self.spawn_bullet(pos, vel, Owner::Bot);
-        }
-        shots.clear();
-        self.shots = shots;
     }
 
     /// Enemy bots hunt the nearest of the player and the friendly aircraft.
     fn pick_quarry(&self, b: &Bot) -> Quarry {
         let p = &self.player;
+        let seen = p.airborne() && self.environment.agl(p.pos) > HUNT_MIN_ALTITUDE && self.detectable(&b.af, p.pos, false);
         let mut best = Quarry {
             track: Track::Player,
-            pos: p.pos,
-            vel: p.velocity(),
-            huntable: p.airborne() && p.pos.y > HUNT_MIN_ALTITUDE,
+            pos: if seen { p.pos } else { RUNWAY_CENTER.add(UP.mul(1500.0)) },
+            vel: if seen { p.velocity() } else { V3::default() },
+            huntable: seen,
         };
         if b.friendly {
             best.huntable = false;
@@ -212,7 +278,7 @@ impl Game {
         }
         let mut best_dist = if best.huntable { p.pos.sub(b.pos).len() } else { f32::MAX };
         for (j, f) in self.bots.iter().enumerate() {
-            if f.alive && f.friendly {
+            if f.alive && f.friendly && self.detectable(&b.af, f.pos, false) {
                 let d = f.pos.sub(b.pos).len();
                 if d < best_dist {
                     best_dist = d;
@@ -230,13 +296,14 @@ impl Game {
             .filter(|m| m.life > 0.0 && m.track == me)
             .map(|m| m.pos)
             .filter(|mp| mp.sub(pos).len() < EVADE_RANGE)
+            .filter(|mp| self.environment.clear_line(pos, *mp))
             .min_by(|a, b| a.sub(pos).len().total_cmp(&b.sub(pos).len()))
     }
 
     /// The player sitting on this bot's tail with the nose on it.
     fn attacker_on_tail(&self, b: &Bot) -> Option<V3> {
         let p = &self.player;
-        if b.friendly || !p.airborne() {
+        if b.friendly || !p.airborne() || !self.detectable(&b.af, p.pos, false) {
             return None;
         }
         let to_p = p.pos.sub(b.pos);
@@ -254,14 +321,65 @@ impl Game {
         let pull = if b.is_b2() { 0.6 } else { clamp(0.55 + 0.4 * skill, 0.5, 1.0) };
 
         // 1. Stay out of the ground: nothing else matters.
-        if b.pos.y < FLOOR || b.pos.y - pull_out_height(b) < FLOOR_MARGIN {
+        let agl = self.environment.agl(b.pos);
+        let landing_final = b.landing && b.return_stage >= 2;
+        let floor = if b.landing { 80.0 } else { FLOOR };
+        let margin = if b.landing { 60.0 } else { FLOOR_MARGIN };
+        if !landing_final && (agl < floor || agl - pull_out_height(b) < margin) {
             b.tactic = Tactic::Recover;
             return Intent { dir: flat_fwd.add(UP.mul(1.2)), throttle: 1.0, max_pull: 1.0, brake: false };
         }
         // Too slow to turn: unload and dive for speed.
-        if b.speed < stall_tas * 1.25 {
+        if !landing_final && b.speed < stall_tas * 1.25 {
             b.tactic = Tactic::Recover;
             return Intent { dir: flat_fwd.add(UP.mul(-0.35)), throttle: 1.0, max_pull: 0.3, brake: false };
+        }
+
+        // Fuel and stores are physical limits. Returning pilots fly the circuit and
+        // lower their own gear/flaps; a dry tank still flames out on the way home.
+        let empty = !b.is_b2() && b.ammo <= 0.0 && b.missiles <= 0.0;
+        if b.fuel < 0.15 || empty || b.landing {
+            b.tactic = Tactic::Return;
+            b.landing = true;
+            let dir = runway_dir();
+            let threshold = RUNWAY_CENTER.sub(dir.mul(RUNWAY_LENGTH * 0.5 - 50.0));
+            let join = threshold.sub(dir.mul(10000.0)).add(UP.mul(350.0));
+            let remaining = threshold.sub(b.pos).dot(dir);
+            let cross = RUNWAY_CENTER.sub(b.pos).dot(dir.cross(UP));
+            // Join the inbound course only when already pointing toward the runway.
+            // Switching at the outbound waypoint forced a U-turn during the approach.
+            let inbound = b.fwd().flat().norm().dot(dir) > 0.8;
+            if b.return_stage == 0 && (4500.0..14000.0).contains(&remaining) && cross.abs() < 2500.0 && inbound && b.pos.y < remaining * 0.09 + 100.0 {
+                b.return_stage = 1; b.approach_integral = 0.0;
+            }
+            let capture_width = if remaining < 2500.0 { 20.0 } else { 50.0 };
+            // Leave enough distance for the descent, flare and a touchdown in the
+            // first half of the runway; otherwise fly another circuit.
+            let on_glide = b.pos.y <= remaining * 0.09 + 25.0;
+            if b.return_stage == 1 && (800.0..5500.0).contains(&remaining) && cross.abs() < capture_width && b.fwd().flat().norm().dot(dir) > 0.995 && on_glide {
+                b.return_stage = 2;
+                b.approach_integral = 0.0;
+            } else if b.return_stage == 1 && remaining < 800.0 {
+                b.return_stage = 0; b.approach_integral = 0.0;
+            }
+            let eas = b.speed * b.density.sqrt();
+            b.gear_down = (b.return_stage >= 1 || b.pos.sub(join).len() < 1000.0) && eas < GEAR_SPEED_LIMIT * 0.9;
+            b.flap_command = if b.gear_down && eas < FLAP_SPEED_LIMIT + 10.0 { 0.5 } else { 0.0 };
+            b.low_gains = b.gear_down;
+            if b.return_stage < 2 {
+                let course = if b.return_stage == 0 { join.sub(b.pos) }
+                    else { dir.mul(2200.0).add(dir.cross(UP).mul(cross)).add(UP.mul(clamp(remaining * 0.052 + GEAR_HEIGHT, 30.0, 350.0) - b.pos.y)) };
+                let cruise = b.stats().stall_speed * (b.mass() / b.density).sqrt() * 2.5;
+                let power = if b.is_b2() { 0.7 } else { 0.4 };
+                return Intent { dir: course, throttle: clamp(power + (cruise - b.speed) * 0.02, 0.0, 0.9), max_pull: 0.6, brake: b.speed > cruise + 15.0 };
+            }
+            let target_height = (remaining.max(0.0) * 0.052).max(0.5);
+            let ahead = b.pos.add(dir.mul(400.0));
+            let desired = V3::new(threshold.x - b.pos.x + dir.x * 400.0, target_height - b.pos.y, ahead.z - b.pos.z);
+            let target_speed = b.stats().stall_speed * 1.45;
+            let landing_power = if b.is_b2() { 0.5 } else { 0.25 };
+            let throttle = clamp(landing_power + (target_speed - b.speed) * 0.015, 0.0, 0.8);
+            return Intent { dir: desired, throttle, max_pull: 0.45, brake: b.speed > target_speed + 20.0 };
         }
 
         let me = Track::Bot(i);
@@ -351,32 +469,24 @@ impl Game {
         b.waypoint.sub(b.pos).norm()
     }
 
-    fn bot_gunnery(&mut self, b: &mut Bot, quarry: &Quarry, skill: f32, shots: &mut Vec<(V3, V3)>) {
+    fn bot_gunnery(&mut self, b: &mut Bot, quarry: &Quarry) {
         let to_q = quarry.pos.sub(b.pos);
         let dist = to_q.len();
         let diff = self.difficulty();
         let fwd = b.fwd();
-        if quarry.huntable && dist < diff.gun_range && b.fire_cd <= 0.0 && !b.is_b2() {
+        if quarry.huntable && dist < diff.gun_range && b.fire_cd <= 0.0 && b.ammo > 0.0 && !b.landing {
             let aim = to_q.norm().dot(fwd);
             if aim > diff.aim_cone {
-                b.fire_cd = 0.11 / skill;
-                let spread = 0.012 / skill;
-                let jitter = V3::new(
-                    self.rng.range(-spread, spread),
-                    self.rng.range(-spread, spread),
-                    self.rng.range(-spread, spread),
-                );
-                let dir = fwd.add(jitter).norm();
-                shots.push((b.pos.add(fwd.mul(10.0)), dir.mul(BOT_BULLET_SPEED).add(b.velocity())));
+                // Aiming error of the pilot on top of the gun's own dispersion.
+                let dir = self.spray(fwd, GUN_DISPERSION + diff.aim_error);
+                let rounds = b.ammo.min(ROUNDS_PER_SHOT);
+                if self.spawn_rounds(b.pos.add(fwd.mul(b.stats().radius + 1.0)), dir.mul(BOT_BULLET_SPEED).add(b.velocity()), Owner::Bot, rounds) {
+                    b.ammo -= rounds;
+                    b.fire_cd += b.stats().gun_interval;
+                }
             } else {
                 b.fire_cd = 0.1;
             }
-        }
-        // B-2 bots defend themselves with a tail gun burst.
-        if b.is_b2() && quarry.huntable && dist < B2_TAIL_GUN_RANGE && b.fire_cd <= 0.0 {
-            b.fire_cd = 0.25;
-            let dir = to_q.norm();
-            shots.push((b.pos.add(dir.mul(25.0)), dir.mul(B2_TAIL_GUN_SPEED)));
         }
     }
 
@@ -384,15 +494,17 @@ impl Game {
     fn bot_missiles(&mut self, b: &mut Bot, quarry: &Quarry, skill: f32, dt: f32) {
         let to_q = quarry.pos.sub(b.pos);
         let dist = to_q.len();
-        let in_cone = to_q.norm().dot(b.fwd()) > BOT_LOCK_CONE_DEG.to_radians().cos();
-        let in_range = (BOT_MISSILE_MIN_RANGE..BOT_MISSILE_MAX_RANGE).contains(&dist);
-        let can_lock = quarry.huntable && b.missiles > 0.0 && in_cone && in_range;
+        let in_cone = to_q.norm().dot(b.fwd()) > LOCK_CONE_DEG.to_radians().cos();
+        let diff = self.difficulty();
+        let in_range = (BOT_MISSILE_MIN_RANGE..diff.missile_range).contains(&dist);
+        let clear = self.track_state(quarry.track).is_some_and(|(at, _)| self.environment.clear_line(b.pos, at));
+        let can_lock = quarry.huntable && b.missiles > 0.0 && in_cone && in_range && !b.landing && clear;
         b.locking_player = can_lock && quarry.track == Track::Player;
         if !can_lock {
             b.lock = (b.lock - dt).max(0.0);
             return;
         }
-        b.lock = (b.lock + dt * skill / BOT_LOCK_TIME).min(1.0);
+        b.lock = (b.lock + dt / diff.lock_time).min(1.0);
         if b.lock < 1.0 || b.missile_cd > 0.0 {
             return;
         }
@@ -400,7 +512,7 @@ impl Game {
         let pos = b.pos.add(fwd.mul(b.stats().radius)).add(b.q.rotate(UP).mul(-2.0));
         if self.launch_missile(pos, b.vel.add(fwd.mul(30.0)), quarry.track, Owner::Bot) {
             b.missiles -= 1.0;
-            b.missile_cd = BOT_MISSILE_INTERVAL / skill;
+            b.missile_cd = diff.missile_interval / skill.min(1.0);
             b.lock = 0.0;
             let at_player = if quarry.track == Track::Player { 1.0 } else { 0.0 };
             self.event(event::ENEMY_MISSILE, pos, at_player);

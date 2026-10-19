@@ -6,7 +6,7 @@
  * A footprint from an outline `pts` ([[x, z], ...], either winding) and a roof height.
  * Coordinates are packed into a Float32Array to keep 70k buildings light.
  */
-export function footprint(pts, top) {
+export function footprint(pts, top, bottom = 0) {
   const xz = new Float32Array(pts.length * 2);
   let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
   pts.forEach(([x, z], i) => {
@@ -15,7 +15,7 @@ export function footprint(pts, top) {
     minX = Math.min(minX, x); maxX = Math.max(maxX, x);
     minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z);
   });
-  return { xz, top, minX, maxX, minZ, maxZ };
+  return { xz, top, bottom, minX, maxX, minZ, maxZ };
 }
 
 /**
@@ -24,7 +24,7 @@ export function footprint(pts, top) {
  * building and how far to move.
  */
 export function hitFootprint(f, x, y, z, r, below = r) {
-  if (y - below > f.top) return null;
+  if (y - below > f.top || y + r < f.bottom) return null;
   if (x + r < f.minX || x - r > f.maxX || z + r < f.minZ || z - r > f.maxZ) return null;
   const p = f.xz;
   const n = p.length / 2;
@@ -66,6 +66,7 @@ export class FootprintGrid {
     this.cells = new Map();
   }
   add(f) {
+    this.onAdd?.(f);
     const c = this.cell;
     for (let i = Math.floor(f.minX / c); i <= Math.floor(f.maxX / c); i++) {
       for (let j = Math.floor(f.minZ / c); j <= Math.floor(f.maxZ / c); j++) {

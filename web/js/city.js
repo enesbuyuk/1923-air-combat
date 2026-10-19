@@ -7,6 +7,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { footprint, hitFootprint } from './collision.js';
+import { GROUND } from './layout.js';
 
 const CHUNK = 500; // metres
 const NEAR_R = 2; // chunks around the player drawn with detailed models
@@ -75,7 +76,7 @@ function blocked(x, z) {
   return x * x + z * z < 1300 * 1300 || (Math.abs(x + 40) < 500 && Math.abs(z) < 4000);
 }
 
-function generateChunk(cx, cz, seed) {
+function generateChunk(cx, cz, seed, terrain) {
   const r = rng(hash(cx, cz, seed));
   const d = noise(cx * 0.22, cz * 0.22, seed) * 0.7 + noise(cx * 0.6 + 50, cz * 0.6, seed + 1) * 0.3;
   let lot, street, fill;
@@ -106,12 +107,14 @@ function generateChunk(cx, cz, seed) {
       const x = cx * CHUNK + (i + 0.5) * lot + (r() - 0.5) * lot * 0.16;
       const z = cz * CHUNK + (j + 0.5) * lot + (r() - 0.5) * lot * 0.16;
       if (blocked(x, z)) continue;
+      if (terrain.terrainSurface(x, z) === 2) continue;
       const tree = kind === 'tree';
       lots.push({
         kind,
         variant: (r() * 1e6) | 0,
         x,
         z,
+        y: terrain.terrainHeight(x, z),
         rot: tree ? r() * Math.PI * 2 : ((r() * 4) | 0) * (Math.PI / 2),
         h: kind === 'office' ? 0.8 + r() * 0.7 : kind === 'tower' ? 0.85 + r() * 0.45 : 0.95 + r() * 0.15,
         s: tree ? 0.7 + r() * 0.7 : 1,
@@ -165,7 +168,7 @@ function ensure(scene, m, need, near) {
  * `clearRadius` resolves to the radius (m) around the origin that real buildings already
  * cover; the generated city starts outside it.
  */
-export function createCity(scene, clearRadius = Promise.resolve(0), seed = (Math.random() * 2 ** 32) >>> 0) {
+export function createCity(scene, clearRadius, terrain, seed = (Math.random() * 2 ** 32) >>> 0) {
   const cache = new Map();
   let sets = null;
   let clear2 = 0;
@@ -184,7 +187,7 @@ export function createCity(scene, clearRadius = Promise.resolve(0), seed = (Math
     const key = `${cx},${cz}`;
     let lots = cache.get(key);
     if (!lots) {
-      lots = generateChunk(cx, cz, seed);
+      lots = generateChunk(cx, cz, seed, terrain);
       cache.set(key, lots);
     }
     return lots;
@@ -200,10 +203,17 @@ export function createCity(scene, clearRadius = Promise.resolve(0), seed = (Math
     const s = Math.sin(l.rot);
     const corners = [[box.min.x, box.min.z], [box.max.x, box.min.z], [box.max.x, box.max.z], [box.min.x, box.max.z]];
     const pts = corners.map(([x, z]) => [l.x + (x * c + z * s) * k, l.z + (-x * s + z * c) * k]);
-    return footprint(pts, GROUND_Y + box.max.y * sv * l.h * l.s);
+    return footprint(pts, l.y + GROUND_Y + box.max.y * sv * l.h * l.s, l.y + GROUND_Y);
   }
 
   function rebuild(pcx, pcz) {
+    terrain.clearDynamicObstacles();
+    const sites = [];
+    const ground = terrain.ground();
+    for (let i = 0; i < terrain.maxGround; i++) {
+      const o = i * GROUND.STRIDE;
+      if (ground[o + GROUND.ALIVE] > 0) sites.push([ground[o + GROUND.POS], ground[o + GROUND.POS + 2]]);
+    }
     const buckets = new Map(); // model -> list of matrices
     for (let dz = -FAR_R; dz <= FAR_R; dz++) {
       for (let dx = -FAR_R; dx <= FAR_R; dx++) {
@@ -212,13 +222,16 @@ export function createCity(scene, clearRadius = Promise.resolve(0), seed = (Math
         const near = Math.max(Math.abs(dx), Math.abs(dz)) <= NEAR_R;
         for (const l of chunk(pcx + dx, pcz + dz)) {
           if (l.x * l.x + l.z * l.z < clear2) continue;
+          if (sites.some(([x, z]) => (x - l.x) ** 2 + (z - l.z) ** 2 < 80 ** 2)) continue;
           if (!near && (l.kind === 'tree' || (l.kind === 'house' && dist > HOUSE_FAR_R))) continue;
+          l.fp ??= lotFootprint(l);
+          terrain.addObstacle(l.fp, true);
           const name = near ? l.kind : `far_${l.kind}`;
           const models = sets[name];
           const model = models[l.variant % models.length];
           const [sh, sv] = SETS[name].scale;
           quat.setFromAxisAngle(yAxis, l.rot);
-          pos.set(l.x, GROUND_Y, l.z);
+          pos.set(l.x, l.y + GROUND_Y, l.z);
           scl.set(sh * l.s, sv * l.h * l.s, sh * l.s);
           let list = buckets.get(model);
           if (!list) buckets.set(model, (list = { near, mats: [] }));
@@ -270,7 +283,8 @@ export function createCity(scene, clearRadius = Promise.resolve(0), seed = (Math
       if (!sets) return;
       const pcx = Math.floor(p.x / CHUNK);
       const pcz = Math.floor(p.z / CHUNK);
-      const key = `${pcx},${pcz}`;
+      const mission = terrain.stats();
+      const key = `${pcx},${pcz},${mission.mode},${mission.stage}`;
       if (key === lastKey) return;
       lastKey = key;
       rebuild(pcx, pcz);

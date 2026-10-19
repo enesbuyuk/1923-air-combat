@@ -4,6 +4,8 @@
 use super::aero::{self, lift_coefficient, lift_scale, spool_engine, thrust};
 use super::air::{density_ratio, drag_coefficient, ground_effect, speed_of_sound};
 use super::Game;
+use super::configuration;
+use crate::environment::Surface;
 use crate::config::*;
 use crate::entities::*;
 use crate::layout::event;
@@ -27,18 +29,28 @@ impl Game {
             self.tick_respawn(dt);
             return;
         }
+        let from = self.player.pos;
+        self.player.ground_height = self.environment.height(from.x, from.z);
         if self.player.on_ground {
             self.ground_roll(dt);
-            self.ground_crew(dt);
+            if self.player.alive { self.ground_crew(dt); }
         } else {
             self.fly(dt);
             if !self.player.alive {
                 return;
             }
         }
-        self.steer_back_inside_world(dt);
+        if self.player.alive {
+            if let Some((at, nx, nz, depth)) = self.obstacle_contact(from, &self.player.af) {
+                self.building_hit(at, nx, nz, depth);
+            }
+        }
+        self.update_world_boundary(dt);
+        if !self.player.alive {
+            return;
+        }
         let p = &mut self.player;
-        p.gun_cd -= dt;
+        p.gun_cd = (p.gun_cd - dt).max(-dt);
         p.missile_cd -= dt;
         p.flare_cd -= dt;
         self.fire_gun();
@@ -50,7 +62,7 @@ impl Game {
     fn tick_respawn(&mut self, dt: f32) {
         self.player.respawn -= dt;
         if self.player.respawn <= 0.0 {
-            self.player = Player::on_runway(self.player.ty, self.realism);
+            self.player = Player::on_runway(self.player.ty);
             self.reset_lock();
         }
     }
@@ -59,7 +71,9 @@ impl Game {
     /// liftoff once the wing carries the weight.
     fn ground_roll(&mut self, dt: f32) {
         let inp = self.input;
-        let air = self.weather.air_at(GEAR_HEIGHT);
+        let surface = self.environment.surface(self.player.pos.x, self.player.pos.z);
+        if surface == Surface::Water { let at = self.player.pos; self.kill_player(at); return; }
+        let air = self.weather.air_at(self.player.pos.y);
         let bump = self.weather.roll;
         let p = &mut self.player;
         let s = p.stats();
@@ -67,19 +81,20 @@ impl Game {
         spool_engine(&mut p.af, dt);
         aero::burn_fuel(&mut p.af, dt);
         p.density = density_ratio(p.pos.y);
+        configuration::update(&mut p.af, dt);
         let mass = p.mass();
 
         let right = p.heading.cross(UP).norm();
         // Headwind adds airspeed, tailwind takes it away.
         let airspeed = (p.speed - air.dot(p.heading)).max(0.0);
         let ge = ground_effect(GEAR_HEIGHT, s.span);
-        let cl = lift_coefficient(p.rot, s.alpha_max);
+        let cl = lift_coefficient(p.rot + configuration::camber(&p.af), s.alpha_max);
         let dump = LIFT_DUMP * clamp((LIFT_DUMP_THROTTLE - p.throttle) / 0.2, 0.0, 1.0);
-        let lift_g = cl * lift_scale(&s, airspeed, p.density, mass) * (1.0 + GROUND_EFFECT_LIFT * ge) * (1.0 - dump);
+        let lift_g = cl * lift_scale(&s, airspeed, p.density, mass) * configuration::lift_factor(&p.af) * (1.0 + GROUND_EFFECT_LIFT * ge) * (1.0 - dump);
         // Share of the weight still on the wheels (friction and brakes act through it).
         let wheels = clamp(1.0 - lift_g, 0.0, 1.0);
 
-        let steer_authority = clamp(p.speed / 15.0, 0.0, 1.0);
+        let steer_authority = clamp(p.speed / 15.0, 0.0, 1.0) * clamp(35.0 / p.speed.max(1.0), 0.0, 1.0);
         let mut steer = (-inp.yaw * 0.7 - inp.roll * 0.25) * steer_authority * dt;
         // Crosswind pushes on the tail, so the aircraft weathervanes into the wind.
         steer += air.dot(right) * 0.006 * clamp(airspeed / 30.0, 0.0, 1.0) * dt;
@@ -88,10 +103,13 @@ impl Game {
 
         let k_drag = drag_coefficient(&s);
         let induced = lift_g * GRAVITY * cl * INDUCED_DRAG * (1.0 - 0.5 * ge);
-        let drag = p.density * (k_drag * airspeed * airspeed + LINEAR_DRAG * airspeed) / mass + induced;
-        let mut accel = thrust(&p.af) - drag - ROLLING_FRICTION * wheels;
+        let drag = p.density * ((k_drag + configuration::drag(&p.af)) * airspeed * airspeed + LINEAR_DRAG * airspeed) / mass + induced;
+        let (rolling, brake) = if surface == Surface::Soil { (2.4, 2.5) } else { (ROLLING_FRICTION, WHEEL_BRAKE) };
+        let h0 = self.environment.height(p.pos.x - heading.x * 2.0, p.pos.z - heading.z * 2.0);
+        let h1 = self.environment.height(p.pos.x + heading.x * 2.0, p.pos.z + heading.z * 2.0);
+        let mut accel = thrust(&p.af) - drag - rolling * wheels - GRAVITY * (h1 - h0) / 4.0;
         if inp.brake {
-            accel -= WHEEL_BRAKE * wheels;
+            accel -= brake * wheels;
         }
         let speed_before = p.speed;
         p.speed = (p.speed + accel * dt).max(0.0);
@@ -101,7 +119,7 @@ impl Game {
         // Raise the nose gradually above Vr; otherwise lower it gently
         // (also de-rotates after touchdown).
         let nose_up = p.rot > 0.0;
-        let rotating = p.speed > s.rotate_speed && inp.pitch > 0.2;
+        let rotating = airspeed * p.density.sqrt() > s.rotate_speed && inp.pitch > 0.2;
         let (pitch_before, y_before) = (p.rot + p.gear_pitch, p.pos.y);
         if rotating {
             p.rot = (p.rot + ROTATE_RATE * inp.pitch * dt).min(MAX_ROTATION);
@@ -126,7 +144,10 @@ impl Game {
         let pitch_target = GEAR_PITCH_PER_ACCEL * (p.speed - speed_before) / dt * nosewheel;
         p.gear_pitch_vel += (-GEAR_PITCH_SPRING * (p.gear_pitch - pitch_target) - GEAR_PITCH_DAMPING * p.gear_pitch_vel) * dt;
         p.gear_pitch += p.gear_pitch_vel * dt;
-        p.pos.y = wheels_down_height(p.rot.sin()) + p.gear;
+        let ground = self.environment.height(p.pos.x, p.pos.z);
+        let rough = if surface == Surface::Soil { 0.025 * (p.pos.x * 0.7 + p.pos.z * 0.9).sin() * (p.speed / 30.0).min(1.0) } else { 0.0 };
+        p.pos.y = ground + wheels_down_height(p.rot.sin()) + p.gear + rough;
+        p.ground_height = ground;
         // The struts and the rotation move the origin up and down.
         p.vel.y = (p.pos.y - y_before) / dt;
         // The touchdown attitude eases out so roll and pitch never snap, while the rotation
@@ -158,11 +179,19 @@ impl Game {
         p.bump = bump;
         p.gload = 1.0;
         p.stall = false;
+        // Fast off-runway rolling loads the undercarriage instead of behaving like asphalt.
+        if surface == Surface::Soil && p.speed > 35.0 {
+            let damage = (p.speed - 35.0) * 0.08 * dt;
+            p.hp -= damage;
+            p.gear_health = (p.gear_health - damage * 0.015).max(0.0);
+        }
+        if self.environment.surface(p.pos.x, p.pos.z) == Surface::Water || p.hp <= 0.0 {
+            let at = p.pos; self.kill_player(at);
+        }
     }
 
     /// Stopped in a hangar long enough: the ground crew rearms, refuels and repairs.
     fn ground_crew(&mut self, dt: f32) {
-        let rearm_time = self.rearm_time();
         let p = &mut self.player;
         if !(in_hangar(p.pos.x, p.pos.z) && p.speed < 3.0 && p.throttle < 0.3 && p.needs_service()) {
             p.parked = 0.0;
@@ -170,7 +199,7 @@ impl Game {
         }
         let before = p.parked;
         p.parked += dt;
-        if before < rearm_time && p.parked >= rearm_time {
+        if before < REARM_TIME && p.parked >= REARM_TIME {
             p.rearm();
             let pos = p.pos;
             self.event(event::REARMED, pos, 0.0);
@@ -187,8 +216,10 @@ impl Game {
         }
         // Only a descending aircraft touches down: right after liftoff the wheels may still
         // sit level with the runway while the climb begins.
-        if self.player.vel.y < 0.0 && self.player.pos.y <= wheels_down_height(self.player.fwd().y) {
-            let sink_rate = self.player.vel.y;
+        let ground = self.environment.height(self.player.pos.x, self.player.pos.z);
+        let sink_rate = self.player.vel.y - (ground - self.player.ground_height) / dt;
+        let contact = if self.player.gear_position > 0.95 { wheels_down_height(self.player.fwd().y) } else { 0.8 };
+        if sink_rate < 0.0 && self.player.pos.y - ground <= contact || self.player.pos.y < ground {
             self.touch_down(sink_rate);
         }
     }
@@ -210,29 +241,22 @@ impl Game {
 
     /// The wheels reached the ground: land (possibly hard) or crash.
     fn touch_down(&mut self, sink_rate: f32) {
-        let (max_sink, hard_sink, min_up) = if self.realism {
-            (SIM_MAX_SINK_RATE, SIM_HARD_LANDING_SINK, SIM_MIN_LANDING_UP)
-        } else {
-            (MAX_SINK_RATE, HARD_LANDING_SINK, MIN_LANDING_UP)
-        };
-        let realism = self.realism;
+        let surface = self.environment.surface(self.player.pos.x, self.player.pos.z);
+        let ground = self.environment.height(self.player.pos.x, self.player.pos.z);
         let p = &mut self.player;
         let fwd = p.fwd();
         let upv = p.q.rotate(UP);
-        // Simulator: the tyres burst above their rated touchdown speed.
-        let tyres = !realism || p.speed * p.density.sqrt() < SIM_MAX_TOUCHDOWN * p.stats().stall_speed;
-        let survivable = sink_rate > -max_sink && upv.y > min_up && fwd.y > MIN_LANDING_NOSE && tyres;
+        // Tyres meet the runway at ground speed, independent of wind and air density.
+        let tyres = p.vel.flat().len() < MAX_TOUCHDOWN * p.stats().stall_speed;
+        let survivable = surface != Surface::Water && p.gear_position > 0.97 && p.gear_health > 0.25
+            && sink_rate > -MAX_SINK_RATE && upv.y > MIN_LANDING_UP && fwd.y > MIN_LANDING_NOSE && tyres;
         if !survivable {
-            let pos = p.pos.flat();
+            let pos = V3::new(p.pos.x, ground, p.pos.z);
             self.kill_player(pos);
             self.event(event::GROUND_IMPACT, pos, 1.0);
             return;
         }
-        let mut hard = (-sink_rate - hard_sink).max(0.0) * HARD_LANDING_DAMAGE;
-        if !realism {
-            // Arcade: a landing within the limits is never what destroys the aircraft.
-            hard = hard.min(p.hp - 1.0).max(0.0);
-        }
+        let hard = (-sink_rate - HARD_LANDING_SINK).max(0.0) * HARD_LANDING_DAMAGE;
         p.on_ground = true;
         // Keep the touchdown attitude; the ground roll eases the nose down and wings level.
         // The wheels roll where the nose points, so any crab angle is lost here.
@@ -240,7 +264,8 @@ impl Game {
         p.speed = p.vel.dot(p.heading).max(0.0);
         p.vel = p.heading.mul(p.speed);
         p.rot = clamp(fwd.y.asin(), 0.0, MAX_ROTATION);
-        p.pos.y = wheels_down_height(p.rot.sin());
+        p.pos.y = ground + wheels_down_height(p.rot.sin());
+        p.ground_height = ground;
         p.settle = strut_attitude(p.heading, p.rot).conj().mul(p.q).normalize();
         // The struts soak up the sink rate and rebound.
         p.gear = 0.0;
@@ -248,6 +273,7 @@ impl Game {
         p.gear_pitch = 0.0;
         p.gear_pitch_vel = 0.0;
         let pos = p.pos;
+        p.gear_health = (p.gear_health - hard * 0.02).max(0.0);
         self.event(event::LANDED, pos, hard);
         if hard > 0.0 {
             self.damage_player(hard, pos, false);
@@ -257,32 +283,19 @@ impl Game {
         }
     }
 
-    /// Soft world boundary: turn the aircraft and its flight path back toward the base.
-    fn steer_back_inside_world(&mut self, dt: f32) {
+    /// Mission boundary: warn the pilot and allow time to return under their own control.
+    fn update_world_boundary(&mut self, dt: f32) {
         let p = &mut self.player;
         let horiz = p.pos.flat();
         if horiz.len() <= WORLD_LIMIT {
             p.outside = 0.0;
             return;
         }
-        if self.realism {
-            // No invisible hand: the pilot has SIM_OUT_OF_BOUNDS_TIME to turn back.
-            p.outside += dt;
-            if p.outside >= SIM_OUT_OF_BOUNDS_TIME {
-                let pos = p.pos;
-                self.kill_player(pos);
-            }
-            return;
+        p.outside += dt;
+        if p.outside >= OUT_OF_BOUNDS_TIME {
+            let pos = p.pos;
+            self.kill_player(pos);
         }
-        // A flat turn about the vertical, so flying straight out never loops over the top.
-        let back = horiz.mul(-1.0).norm();
-        let track = p.vel.flat().norm();
-        let angle = clamp(track.dot(back), -1.0, 1.0).acos().min(0.5 * dt);
-        let side = if track.cross(back).y >= 0.0 { 1.0 } else { -1.0 };
-        let turn = Q::axis_angle(UP, side * angle);
-        p.q = turn.mul(p.q).normalize();
-        p.vel = turn.rotate(p.vel);
-        p.heading = turn.rotate(p.heading).flat().norm();
     }
 
     fn fire_gun(&mut self) {
@@ -291,17 +304,19 @@ impl Game {
             return;
         }
         let s = p.stats();
-        p.gun_cd = s.gun_interval;
-        p.ammo -= if self.realism { ROUNDS_PER_SHOT } else { 1.0 };
+        let rounds = p.ammo.min(ROUNDS_PER_SHOT);
         let fwd = p.fwd();
         let right = p.q.rotate(RIGHT);
         // Alternate between the two muzzles.
         let side = if (self.time * 40.0) as i32 % 2 == 0 { 1.0 } else { -1.0 };
         let muzzle = p.pos.add(fwd.mul(s.radius)).add(right.mul(side * 1.2));
         let pvel = p.velocity();
-        let dir = self.disperse(self.gun_assist_dir(muzzle, fwd, pvel));
+        let dir = self.disperse(fwd);
         let vel = dir.mul(PLAYER_BULLET_SPEED).add(pvel);
-        self.spawn_bullet(muzzle, vel, Owner::Player);
+        if self.spawn_rounds(muzzle, vel, Owner::Player, rounds) {
+            self.player.ammo -= rounds;
+            self.player.gun_cd += s.gun_interval;
+        }
     }
 
     fn fire_missile(&mut self) {
@@ -333,53 +348,24 @@ impl Game {
     }
 
     /// Random dispersion of one round inside GUN_DISPERSION around `dir`.
-    fn disperse(&mut self, dir: V3) -> V3 {
+    pub(super) fn disperse(&mut self, dir: V3) -> V3 {
+        self.spray(dir, GUN_DISPERSION)
+    }
+
+    /// Random offset of up to `spread` rad around `dir`, uniform over the disc.
+    pub(super) fn spray(&mut self, dir: V3, spread: f32) -> V3 {
         let side = dir.cross(UP).norm();
         let up = side.cross(dir);
         let a = self.rng.range(0.0, std::f32::consts::TAU);
-        let r = GUN_DISPERSION * self.rng.next().sqrt();
+        let r = spread * self.rng.next().sqrt();
         dir.add(side.mul(a.cos() * r)).add(up.mul(a.sin() * r)).norm()
-    }
-
-    /// Aim assist: if a target sits within a small cone ahead, steer the shot onto
-    /// its lead point (target motion + bullet drop), so near-misses still connect.
-    pub(super) fn gun_assist_dir(&self, muzzle: V3, fwd: V3, pvel: V3) -> V3 {
-        if self.realism {
-            return fwd;
-        }
-        let cone = GUN_ASSIST_CONE_DEG.to_radians().cos();
-        let mut best: Option<(f32, V3)> = None;
-        let bots = self.bots.iter().filter(|b| b.alive && !b.friendly).map(|b| (b.pos, b.velocity()));
-        let ground = self.ground.iter().filter(|g| g.alive).map(|g| (g.pos, V3::default()));
-        for (pos, vel) in bots.chain(ground) {
-            let d = pos.sub(muzzle);
-            let dist = d.len();
-            if dist > GUN_ASSIST_RANGE {
-                continue;
-            }
-            let c = d.norm().dot(fwd);
-            if c <= cone || best.is_some_and(|(bc, _)| c <= bc) {
-                continue;
-            }
-            // Iterate time-to-go a few times to converge on the intercept point.
-            let rel_vel = vel.sub(pvel);
-            let mut tgo = dist / PLAYER_BULLET_SPEED;
-            let mut aim = d;
-            for _ in 0..3 {
-                aim = pos.add(rel_vel.mul(tgo)).sub(muzzle);
-                aim.y += 0.5 * GRAVITY * tgo * tgo;
-                tgo = aim.len() / PLAYER_BULLET_SPEED;
-            }
-            best = Some((c, aim.norm()));
-        }
-        best.map_or(fwd, |(_, aim)| aim)
     }
 
     /// Missile seeker: track the enemy (aircraft or ground target) closest to the nose
     /// within the cone; holding the same target for LOCK_TIME completes the lock.
     fn update_lock(&mut self, dt: f32) {
         let p = &self.player;
-        if !p.airborne() {
+        if !p.airborne() || p.max_missiles == 0.0 {
             self.reset_lock();
             return;
         }
@@ -393,6 +379,7 @@ impl Game {
             if d.len() > LOCK_RANGE {
                 continue;
             }
+            if !self.detectable(&p.af, pos, matches!(track, Track::Ground(_))) { continue; }
             let c = d.norm().dot(fwd);
             if c > best_dot {
                 best_dot = c;

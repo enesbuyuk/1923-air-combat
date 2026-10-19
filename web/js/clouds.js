@@ -8,7 +8,7 @@
 // white (post.js reads `inside`).
 
 import * as THREE from 'three';
-import { HAZE_GLSL, SUN } from './atmosphere.js';
+import { ATMOSPHERE, HAZE_GLSL, SUN } from './atmosphere.js';
 
 /** The field repeats every TILE metres in x and z. */
 const TILE = 36000;
@@ -92,6 +92,7 @@ const FRAGMENT = /* glsl */ `
   varying float vLight;
   varying float vFade;
   varying vec3 vOffset;
+  uniform vec3 sunlight;
   ${HAZE_GLSL}
   void main() {
     #include <logdepthbuf_fragment>
@@ -99,7 +100,7 @@ const FRAGMENT = /* glsl */ `
     if (a < 0.01) discard;
     vec3 shadow = vec3(0.40, 0.46, 0.57);
     vec3 lit = vec3(1.0, 0.98, 0.94);
-    vec3 col = mix(shadow, lit, vLight);
+    vec3 col = mix(shadow, lit, vLight) * sunlight;
     col = mix(col, hazeTint(normalize(vOffset)), hazeFactor(vOffset));
     gl_FragColor = vec4(col, a);
   }
@@ -154,7 +155,7 @@ export class Clouds {
     geo.setAttribute('spin', new THREE.InstancedBufferAttribute(new Float32Array(spins), 1));
     geo.instanceCount = sizes.length;
     this.mesh = new THREE.Mesh(geo, new THREE.ShaderMaterial({
-      uniforms: { map: { value: puffTexture() }, tile: { value: TILE } },
+      uniforms: { map: { value: puffTexture() }, tile: { value: TILE }, ...ATMOSPHERE },
       vertexShader: VERTEX,
       fragmentShader: FRAGMENT,
       transparent: true,

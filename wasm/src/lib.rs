@@ -9,6 +9,7 @@
 
 mod config;
 mod entities;
+mod environment;
 mod game;
 mod layout;
 mod math;
@@ -31,7 +32,10 @@ fn game() -> &'static mut Game {
 pub extern "C" fn init(aircraft: i32, seed: u32) {
     let ty = (aircraft.max(0) as usize).min(STATS.len() - 1);
     unsafe {
-        GAME = Some(Box::new(Game::new(ty, seed)));
+        let world = GAME.as_mut().map(|g| std::mem::take(&mut g.environment));
+        let mut fresh = Box::new(Game::new(ty, seed));
+        if let Some(world) = world { fresh.environment = world; }
+        GAME = Some(fresh);
     }
     game().write_out();
 }
@@ -59,13 +63,6 @@ pub extern "C" fn set_mode(mode: i32) {
     game().write_out();
 }
 
-/// Realism: 0 Arcade, 1 Simulator (see `Game::realism`). Like the density, `init` resets it.
-#[no_mangle]
-pub extern "C" fn set_realism(on: i32) {
-    game().set_realism(on != 0);
-    game().write_out();
-}
-
 #[no_mangle]
 pub extern "C" fn step(dt: f32) {
     game().step(dt);
@@ -78,11 +75,51 @@ pub extern "C" fn set_enemy_density(d: f32) {
     game().density = clamp(d, 0.25, 3.0);
 }
 
-/// Enemy difficulty: 0 easy, 1 medium, 2 hard. AI and damage change at once, enemy
-/// health and speed from the next wave. Like the density, `init` resets it.
+/// Enemy pilot skill only: 0 easy, 1 medium, 2 hard.
 #[no_mangle]
 pub extern "C" fn set_difficulty(level: i32) {
     game().difficulty = level.clamp(0, DIFFICULTY.len() as i32 - 1) as usize;
+}
+
+#[no_mangle]
+pub extern "C" fn toggle_gear() -> i32 {
+    let p = &mut game().player;
+    if !p.alive || p.on_ground { return 0; }
+    p.gear_down = !p.gear_down;
+    game().write_out();
+    1
+}
+#[no_mangle]
+pub extern "C" fn cycle_flaps() {
+    let p = &mut game().player;
+    if p.alive { p.flap_command = if p.flap_command < 0.25 { 0.5 } else if p.flap_command < 0.75 { 1.0 } else { 0.0 }; }
+    game().write_out();
+}
+#[no_mangle]
+pub extern "C" fn terrain_height(x: f32, z: f32) -> f32 { environment::height(x, z) }
+#[no_mangle]
+pub extern "C" fn terrain_surface(x: f32, z: f32) -> i32 { environment::surface(x, z) as i32 }
+#[no_mangle]
+pub extern "C" fn line_of_sight(ax: f32, ay: f32, az: f32, bx: f32, by: f32, bz: f32) -> i32 {
+    game().environment.clear_line(V3::new(ax, ay, az), V3::new(bx, by, bz)) as i32
+}
+#[no_mangle]
+pub extern "C" fn obstacle_buffer_ptr() -> *mut f32 { game().obstacle_import.as_mut_ptr() }
+#[no_mangle]
+pub extern "C" fn clear_obstacles(dynamic: i32) {
+    let e = &mut game().environment;
+    if dynamic != 0 { e.dynamic_obstacles.clear(); } else { e.static_obstacles.clear(); }
+}
+/// Buffer: vertex count, bottom, top, then x/z pairs (at most 512 vertices).
+#[no_mangle]
+pub extern "C" fn add_obstacle(dynamic: i32) {
+    let g = game();
+    let count = g.obstacle_import[0] as usize;
+    if !(3..=512).contains(&count) { return; }
+    let points = g.obstacle_import[3..3 + count * 2].chunks_exact(2).map(|p| (p[0], p[1])).collect();
+    let (bottom, top) = (g.obstacle_import[1], g.obstacle_import[2]);
+    let obstacles = if dynamic != 0 { &mut g.environment.dynamic_obstacles } else { &mut g.environment.static_obstacles };
+    obstacles.add(points, bottom, top);
 }
 
 /// See `Game::building_hit`. Output buffers are refreshed so JS sees the result at once.

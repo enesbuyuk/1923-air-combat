@@ -4,6 +4,7 @@
 // Building data (c) OpenStreetMap contributors, ODbL.
 import * as THREE from 'three';
 import { footprint } from './collision.js';
+import { onTimeOfDay } from './atmosphere.js';
 
 const CELL = 750; // metres per merged mesh, so off-screen cells are frustum-culled
 const FLOOR = 3.1; // metres per window row
@@ -31,6 +32,36 @@ function windowTexture() {
   x.fillRect(16, 18, 32, 8);
   const t = new THREE.CanvasTexture(c);
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 8;
+  return t;
+}
+
+/** Windows per side of the night glow texture (it repeats less often than the walls). */
+const LIT_TILES = 8;
+
+/**
+ * Glow of the windows at night: the same window layout, LIT_TILES² of them per texture,
+ * about a third lit in warm or cool tones. Tile corners stay black, so roofs (sampled at
+ * a tile corner) never glow.
+ */
+function litWindowTexture() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 64 * LIT_TILES;
+  const x = c.getContext('2d');
+  x.fillStyle = '#000';
+  x.fillRect(0, 0, c.width, c.height);
+  const tones = ['#ffd08a', '#ffc070', '#ffe2b0', '#d8e4ff', '#ffb860'];
+  for (let i = 0; i < LIT_TILES * LIT_TILES; i++) {
+    const r = hash(i + 31337);
+    if (r > 0.34) continue;
+    x.globalAlpha = 0.55 + hash(i + 7) * 0.45;
+    x.fillStyle = tones[(hash(i + 99) * tones.length) | 0];
+    x.fillRect((i % LIT_TILES) * 64 + 16, Math.floor(i / LIT_TILES) * 64 + 18, 32, 30);
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(1 / LIT_TILES, 1 / LIT_TILES);
   t.colorSpace = THREE.SRGBColorSpace;
   t.anisotropy = 8;
   return t;
@@ -125,7 +156,7 @@ function addBuilding(b, pts, h, wall, roof, base) {
  * single storey is left out.
  * Resolves to the radius (m) the data covers, or 0 when it is missing.
  */
-export async function loadBuildings(scene, colliders, ceiling = () => Infinity) {
+export async function loadBuildings(scene, colliders, ceiling = () => Infinity, terrain = null) {
   let data;
   try {
     const res = await fetch('data/buildings.json');
@@ -134,7 +165,10 @@ export async function loadBuildings(scene, colliders, ceiling = () => Infinity) 
   } catch {
     return 0;
   }
-  const mat = new THREE.MeshLambertMaterial({ vertexColors: true, map: windowTexture() });
+  const mat = new THREE.MeshLambertMaterial({
+    vertexColors: true, map: windowTexture(), emissive: 0xffffff, emissiveMap: litWindowTexture(), emissiveIntensity: 0,
+  });
+  onTimeOfDay((night) => { mat.emissiveIntensity = night ? 1.6 : 0; });
   const cells = new Map();
   const wall = new THREE.Color();
   const roof = new THREE.Color();
@@ -166,8 +200,9 @@ export async function loadBuildings(scene, colliders, ceiling = () => Infinity) 
     let b = cells.get(key);
     if (!b) cells.set(key, (b = new CellBuilder()));
     // Sink the base a little so it never floats over the lower imagery layers.
-    addBuilding(b, pts, height, wall, roof, -1);
-    colliders.add(footprint(pts, height - 1));
+    const base = (terrain?.terrainHeight(cx, cz) ?? 0) - 1;
+    addBuilding(b, pts, height, wall, roof, base);
+    colliders.add(footprint(pts, base + height, base));
   }
   const group = new THREE.Group();
   for (const b of cells.values()) {
