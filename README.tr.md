@@ -33,6 +33,7 @@ Türk Hava Üssü'nden (LTBX) kalk, düşman dalgalarını düşür ve piste sa�
 - [Hızlı Başlangıç](#hızlı-başlangıç)
 - [Kontroller](#kontroller)
 - [Oyun Modları](#oyun-modlari)
+- [Online Oyun](#online-oyun)
 - [Hayatta Kalma İpuçları](#hayatta-kalma)
 - [İniş Rehberi](#inis-rehberi)
 - [3D Modeller](#3d-modeller)
@@ -110,6 +111,7 @@ cd 1923-air-combat
 ```
 
 - Sadece derlemek için: `./build.sh`
+- Online odalarla (worker, `wrangler dev` üzerinden): `./build.sh online`, bkz. [Online Oyun](#online-oyun)
 - 8080 doluysa betik bir sonraki boş portu bulur; elle seçmek için: `PORT=3000 ./build.sh serve`
 
 > [!NOTE]
@@ -139,6 +141,7 @@ cd 1923-air-combat
 | `M` | Sesi aç / kapat |
 | `N` | Uyarı seslerini aç / kapat (RWR, füze, pull up) |
 | `Esc` | Duraklat |
+| `Tab` (basılı) | Online odada skor tablosu |
 
 **Gamepad** (standart eşleme): sol stick pitch ve roll, sağ stick dümen, `RT` / `LT` gaz artır / azalt, `A` top, `B` füze, `X` veya `RB` flare, `LB` fren, D-pad yukarı takım, D-pad aşağı flap, `Y` kamera, `Start` duraklat.
 
@@ -156,6 +159,21 @@ Görevi menüden veya duraklatma ekranından seç. Bütün görevler simülatör
 | **Strike** | Hedef bölgedeki tüm SAM sahalarını top veya füzeyle yok et (uçaklar gibi kilitlenirler). Her saha 7 km içinde, yerden yaklaşık 120 m üstündeki uçağı açık görüş hattında algılar; arazi ve binalar radarını perdeleyebilir. Temizlenen bölge bonus kazandırır, ardından daha büyük bir bölge gelir. Küçük düşman dalgaları koruma yapar. |
 | **Escort** | Dost bir B-2 (HUD ve radarda mavi) üs çevresinde bir tur uçar. Düşman avcıları onu hedefler; sekiz ayağı tamamlatırsan bonus kazanırsın. |
 | **Free** | Düşman, SAM sahası veya hedef yok. Şehrin üstünde serbestçe uç. |
+
+## Online Oyun
+
+Arkadaşlarınla birbirinize karşı uç (herkes herkese karşı).
+
+1. Menünün sağ üstündeki **Online**: bir çağrı adı gir, odanın **gün saatini** (gündüz / gece) ve **silahlarını** (top + füze / yalnız top) seç, **Create room**'a bas.
+2. Davet linkini (`…/?room=ABC123`) **Share** veya **Copy** ile arkadaşlarına gönder.
+3. Linki açan, oda ayarlarıyla birlikte daveti görür; **Accept** ile odaya katılır.
+4. Herkes uçağını seçip kalkar. Her pilotun 36 pistinde kendi yeri vardır; birbirinizi düşürün, yeniden doğma her zamanki gibi çalışır. Skor tablosu için `Tab`'ı basılı tut.
+
+Bir odada en fazla 8 pilot olur. Odayı kuranın ayarları herkes için geçerlidir (odadayken görev, zorluk, yoğunluk ve gün saati ayarları kilitlenir) ve herkes aynı havada uçar. Duraklatmak odayı durdurmaz: uçağın kumandasız uçmaya devam eder. Son pilot ayrıldıktan bir gün sonra oda silinir.
+
+Nasıl çalışır: worker, bir odanın pilotları arasındaki mesajları bir Durable Object üzerinden aktarır (`worker/room.js`); hiçbir şey simüle etmez. Her istemci kendi uçağını uçurur, diğerlerini kendi çekirdeğindeki bot yuvalarına yansıtır ve 20 Hz durum güncellemeleri arasında ileri kestirir. Top isabetlerine ateş edenin istemcisi karar verir ve vurulana gönderir; füzeyi hedefin istemcisi uçurur, böylece flare ve kaçış gerçek füzeye karşı işler. Her pilot kendi düşüşünü bildirir; düşüş, ona son hasar vereni yazılır.
+
+Online oyun worker gerektirir, `./build.sh serve` onu çalıştırmaz. Yerelde `./build.sh online` kullan (Node.js ve `.env` içinde `R2_BUCKET` gerekir): oyunu oda sunucusuyla birlikte `wrangler dev` üzerinden açar, uçak modellerini ilk seferde yerel R2'ye kopyalar. Başka bilgisayarlardaki arkadaşların için oyunun yayında olması gerekir (`tools/deploy.sh`).
 
 <a id="hayatta-kalma"></a>
 

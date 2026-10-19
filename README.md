@@ -34,6 +34,7 @@ Take off from the Turkish Air Base (LTBX), shoot down enemy waves, and land back
 - [Quick Start](#quick-start)
 - [Controls](#controls)
 - [Game Modes](#game-modes)
+- [Online Play](#online-play)
 - [Survival Tips](#survival-tips)
 - [Landing Guide](#landing-guide)
 - [3D Models](#3d-models)
@@ -109,6 +110,7 @@ cd 1923-air-combat
 ```
 
 - Build only: `./build.sh`
+- With online rooms (the worker, via `wrangler dev`): `./build.sh online`, see [Online Play](#online-play)
 - If 8080 is taken, the script finds the next free port; to pick one manually: `PORT=3000 ./build.sh serve`
 - If [Binaryen](https://github.com/WebAssembly/binaryen)'s `wasm-opt` is installed, the build runs it on the wasm (`-O3`; `WASM_OPT=-Oz ./build.sh` for size, `WASM_OPT=0` to skip)
 - Optional model compression: `tools/optimize_models.sh` writes KTX2 (or webp) textures and Meshopt geometry to `dist/models/` without touching `web/models/`; see the script header for options
@@ -140,6 +142,7 @@ cd 1923-air-combat
 | `M` | Toggle sound |
 | `N` | Toggle warning sounds (RWR, launch, pull up) |
 | `Esc` | Pause |
+| `Tab` (hold) | Scoreboard in an online room |
 
 **Gamepad** (standard mapping): left stick pitch and roll, right stick rudder, `RT` / `LT` throttle up / down, `A` cannon, `B` missile, `X` or `RB` flares, `LB` brake, D-pad up gear, D-pad down flaps, `Y` camera, `Start` pause.
 
@@ -155,6 +158,21 @@ Pick the mission in the menu or the pause screen. All missions use simulator fli
 | **Strike** | Destroy every SAM site of the target area with cannon or missiles (they lock like aircraft). Each site acquires an aircraft above ~120 m AGL within 7 km when its line of sight is clear; terrain and buildings can mask you. A cleared area pays a bonus and the next, larger one appears. Smaller enemy waves fly cover. |
 | **Escort** | A friendly B-2 (blue on the HUD and radar) flies a circuit around the base. Enemy fighters go for it; bring it around eight legs for the bonus. |
 | **Free** | No enemies, no SAM sites, no objectives. Just fly around the city. |
+
+## Online Play
+
+Fly against your friends, free-for-all.
+
+1. **Online** (top right of the menu): enter a callsign, choose the room's **time of day** (day / night) and **weapons** (guns + missiles / guns only), then **Create room**.
+2. **Share** or **Copy** the invite link (`…/?room=ABC123`) and send it to your friends.
+3. Opening the link shows the invitation with the room's settings; **Accept** joins it.
+4. Everyone picks an aircraft and takes off. Each pilot has their own spot on runway 36; shoot each other down, respawns work as usual. Hold `Tab` for the scoreboard.
+
+Up to 8 pilots per room. The host's settings apply to everyone (the mission, difficulty, density and time-of-day settings are locked while in a room), and every pilot flies in the same weather. Pausing does not stop the room: your aircraft flies on hands-off. A room is deleted a day after the last pilot leaves.
+
+How it works: the worker relays messages between the pilots of a room through a Durable Object (`worker/room.js`); it simulates nothing. Each client flies its own aircraft and mirrors the others into bot slots of its core, extrapolated between 20 Hz state updates. Cannon hits are decided by the shooter's client and sent to the pilot hit; a missile is flown by its target's client, so flares and evasion work against the real thing. Each pilot reports their own death, credited to whoever damaged them last.
+
+Online play needs the worker, which `./build.sh serve` does not run. Locally use `./build.sh online` (Node.js and `R2_BUCKET` in `.env` needed): it starts the game with its room server through `wrangler dev`, copying the aircraft models into the local R2 the first time. Friends on other machines need a deployed copy (`tools/deploy.sh`).
 
 ## Survival Tips
 
@@ -207,7 +225,9 @@ Mind the licenses of the models you use (CC-BY requires attribution).
 Around the airport (~6 km) there are **real buildings**: building footprints pulled from OpenStreetMap are extruded based on their level/height data (`web/js/buildings.js`, data in `web/data/buildings.json`). To refresh the data or change the radius:
 
 ```bash
-uv run python3 tools/fetch_osm_buildings.py 6000   # radius in meters
+uv run python3 worker/index.js                Cloudflare Worker: R2 models and the /api/rooms routes
+worker/room.js                 online room Durable Object (relay, scoreboard)
+tools/fetch_osm_buildings.py 6000   # radius in meters
 ```
 
 Building data © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors, ODbL.
@@ -235,6 +255,7 @@ wasm/src/game/flight.rs        player: ground roll, touchdown, ground crew, weap
 wasm/src/game/bots.rs          enemy waves, bot tactics and autopilot
 wasm/src/game/projectiles.rs   cannon rounds, missile guidance and energy, flares
 wasm/src/game/missions.rs      game modes: waves, strike (SAM sites), escort, free
+wasm/src/game/remote.rs        other online pilots in bot slots, their hits and missiles
 wasm/src/game/                 also game state (mod.rs), atmosphere/weather (air.rs), tests (cargo test)
 web/index.html                 menu + overlays
 web/js/main.js                 boot, game state, game loop, event handling
@@ -258,6 +279,8 @@ web/js/ground.js               SAM site models (strike mode)
 web/js/gforce.js               G blackout / G-LOC effect
 web/js/menu.js                 aircraft selection menu
 web/js/settings.js             mission / difficulty / enemy density settings
+web/js/online.js               online rooms: connection, state sync, hits, missiles, kills
+web/js/lobby.js                online screens: create room, invitation, invite link, scoreboard
 web/js/collision.js            building collision tests
 web/js/models.js               procedural aircraft + GLB loader
 web/js/navlights.js            aircraft position lights, strobes, beacon and landing light (night)
