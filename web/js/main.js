@@ -989,7 +989,7 @@ async function boot() {
       console.warn('Shader precompile failed', e);
     }
     progress(1, 'Ready');
-    window.__1923 = { sim, world, camera, scene, controls, airflow, vortices, vapor, clouds, post, rig, quality, renderer, effects, online };
+    window.__1923 = { sim, world, camera, scene, controls, airflow, vortices, vapor, clouds, post, rig, quality, renderer, effects, online, hud };
     setState('menu');
     lobby.checkInvite();
     // Remaining aircraft download one by one while the player sits in the menu.
