@@ -6,7 +6,7 @@
 // buffer moves, and the decoded player / stats / event records are reused objects that the
 // next call overwrites. Callers that need a value to outlive the next call copy it.
 
-import { PLAYER, BOT, BULLET, MISSILE, FLARE, GROUND, EVENT, STATS, MAX_EVENTS } from './layout.js';
+import { PLAYER, BOT, BULLET, MISSILE, FLARE, GROUND, EVENT, STATS, MAX_EVENTS, REMOTE } from './layout.js';
 
 const WASM_URL = '1923_air.wasm';
 
@@ -135,9 +135,12 @@ export class Sim {
     this._event = { type: 0, x: 0, y: 0, z: 0, extra: 0 };
   }
 
-  /** New game; density and difficulty reset in the core, so re-apply them afterwards. */
-  init(aircraftType) {
-    this.wasm.init(aircraftType, (Math.random() * 0xffffffff) >>> 0);
+  /**
+   * New game; density and difficulty reset in the core, so re-apply them afterwards. Online
+   * rooms pass their `seed` so every pilot flies in the same weather.
+   */
+  init(aircraftType, seed = (Math.random() * 0xffffffff) >>> 0) {
+    this.wasm.init(aircraftType, seed);
   }
 
   setInput({ pitch, roll, yaw, throttle, gun, missile, brake, flare }) {
@@ -169,6 +172,26 @@ export class Sim {
     buf.set(f.xz, 3);
     this.wasm.add_obstacle(dynamic ? 1 : 0);
   }
+
+  /** Metres down the runway the player spawns (online pilots each get their own spot). */
+  setSpawnOffset(metres) { this.wasm.set_spawn_offset(metres); }
+
+  // Other pilots of an online room live in bot slots the AI leaves alone (game/remote.rs).
+
+  /** Pose bot slot `slot` as another pilot from `rec` (REMOTE.LEN floats); `live` false hides it. */
+  setRemote(slot, rec, live = true) {
+    const buf = this._remoteImport = this.view(this._remoteImport, this.wasm.remote_buffer_ptr(), REMOTE.LEN);
+    buf.set(rec);
+    this.wasm.set_remote(slot, live ? 1 : 0);
+  }
+  clearRemote(slot) { this.wasm.clear_remote(slot); }
+  /** Cannon damage dealt to the pilot in `slot` since the last call. */
+  takeRemoteDamage(slot) { return this.wasm.take_remote_damage(slot); }
+  /** Damage another pilot reports having dealt to the player. */
+  remoteHit(damage) { this.wasm.remote_hit(damage); }
+  /** Another pilot's missile; `target` -2 the player, a bot slot, or -1. */
+  remoteMissile(d, target) { this.wasm.remote_missile(d[0], d[1], d[2], d[3], d[4], d[5], target); }
+  remoteFlare(slot) { this.wasm.remote_flare(slot); }
 
   /** Game mode (layout.js MODE); restarts the mission objectives. */
   setMode(mode) {

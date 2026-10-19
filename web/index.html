@@ -85,6 +85,7 @@
           <dt><kbd>N</kbd></dt><dd>Mute warning sounds</dd>
           <dt><kbd>Esc</kbd></dt><dd>Pause</dd>
           <dt><kbd>H</kbd></dt><dd>Show / hide controls</dd>
+          <dt><kbd>Tab</kbd></dt><dd>Online scoreboard</dd>
         </dl>
         <p class="controls-note">Gamepad: left stick flies, right stick rudder, RT / LT throttle, A cannon, B missile, X / RB flares, LB brake, D-pad up gear, D-pad down flaps, Y camera, Start pause. Touch screens get on-screen controls.</p>
       </details>
@@ -102,7 +103,25 @@
         <span class="setting-label">Volume</span>
         <div class="volume"><input type="range" min="0" max="100" step="5" data-volume aria-label="Volume" /><span class="volume-value"></span></div>
       </div>
-      <button id="start-btn" class="primary"><span>Take off</span></button>
+      <div class="launch">
+        <button id="online-btn" class="online-cta" type="button">
+          <span class="cta-icon" aria-hidden="true"></span>
+          <span class="cta-text">
+            <span class="cta-title">Fly online</span>
+            <span class="cta-sub">Create a room · invite friends</span>
+          </span>
+          <span class="cta-arrow" aria-hidden="true">›</span>
+        </button>
+        <button id="online-status" class="online-cta in-room hidden" type="button">
+          <span class="cta-icon live" aria-hidden="true"></span>
+          <span class="cta-text">
+            <span class="cta-title" data-room-chip></span>
+            <span class="cta-sub" data-room-sub></span>
+          </span>
+          <span class="cta-arrow" aria-hidden="true">›</span>
+        </button>
+        <button id="start-btn" class="primary"><span>Take off</span></button>
+      </div>
     </footer>
   </div>
 
@@ -113,6 +132,11 @@
       <button id="resume-btn" class="primary"><span>Resume</span></button>
       <button id="restart-btn">Restart</button>
       <button id="menu-btn">Change aircraft</button>
+      <div id="pause-online" class="pause-online hidden">
+        <span class="setting-label" data-room-title></span>
+        <ol class="pilot-list" data-pilots></ol>
+        <button id="pause-leave">Leave room</button>
+      </div>
       <div class="pause-setting">
         <span class="setting-label">Mission</span>
         <div class="segmented" data-setting="mode" role="radiogroup" aria-label="Mission type"></div>
@@ -128,6 +152,71 @@
         <div class="volume"><input type="range" min="0" max="100" step="5" data-volume aria-label="Volume" /><span class="volume-value"></span></div>
       </div>
     </div>
+  </div>
+
+  <div id="online" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="online-title">
+    <div class="online-box panel">
+      <header class="online-head">
+        <h2 id="online-title">Fly online</h2>
+        <button id="online-close" class="ghost" type="button">Close</button>
+      </header>
+      <label class="online-field">
+        <span class="setting-label">Callsign</span>
+        <input id="online-name" type="text" maxlength="16" autocomplete="nickname" spellcheck="false" placeholder="Pilot" />
+      </label>
+
+      <section id="online-create" class="online-section">
+        <p class="online-note">Create a room, send the invite link to your friends, and dogfight each other.</p>
+        <div class="online-settings">
+          <span class="setting-label">Time of day</span>
+          <div class="segmented" id="room-time" role="radiogroup" aria-label="Room time of day">
+            <button type="button" role="radio" data-v="0" aria-checked="true">Day</button>
+            <button type="button" role="radio" data-v="1" aria-checked="false">Night</button>
+          </div>
+          <span class="setting-label">Weapons</span>
+          <div class="segmented" id="room-weapons" role="radiogroup" aria-label="Room weapons">
+            <button type="button" role="radio" data-v="0" aria-checked="true">Guns + missiles</button>
+            <button type="button" role="radio" data-v="1" aria-checked="false">Guns only</button>
+          </div>
+        </div>
+        <button id="room-create" class="primary" type="button"><span>Create room</span></button>
+      </section>
+
+      <section id="online-invite" class="online-section hidden">
+        <p class="invite-text"><b data-invite-host></b> invited you to room <b data-invite-code></b></p>
+        <div class="room-facts" data-invite-facts></div>
+        <div class="online-actions">
+          <button id="invite-accept" class="primary" type="button"><span>Accept</span></button>
+          <button id="invite-decline" type="button">Decline</button>
+        </div>
+      </section>
+
+      <section id="online-room" class="online-section hidden">
+        <div class="room-head">
+          <span class="setting-label">Room</span>
+          <b class="room-code" data-room-code></b>
+        </div>
+        <div class="room-facts" data-room-facts></div>
+        <div class="invite-row">
+          <input id="room-link" type="text" readonly aria-label="Invite link" />
+          <button id="room-share" class="ghost" type="button">Share</button>
+          <button id="room-copy" class="ghost" type="button">Copy</button>
+        </div>
+        <span class="setting-label">Pilots</span>
+        <ol class="pilot-list" data-pilots></ol>
+        <div class="online-actions">
+          <button id="room-ready" class="primary" type="button"><span>Choose aircraft</span></button>
+          <button id="room-leave" type="button">Leave room</button>
+        </div>
+      </section>
+
+      <p id="online-error" class="online-error" role="alert"></p>
+    </div>
+  </div>
+
+  <div id="scoreboard" class="scoreboard panel hidden" aria-live="polite">
+    <span class="setting-label" data-room-title></span>
+    <ol class="pilot-list" data-pilots></ol>
   </div>
 
   <script type="module" src="js/main.js"></script>

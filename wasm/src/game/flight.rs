@@ -62,9 +62,16 @@ impl Game {
     fn tick_respawn(&mut self, dt: f32) {
         self.player.respawn -= dt;
         if self.player.respawn <= 0.0 {
-            self.player = Player::on_runway(self.player.ty);
+            self.spawn_player();
             self.reset_lock();
         }
+    }
+
+    /// A fresh aircraft at the start of the runway, `spawn_offset` further down it.
+    pub(crate) fn spawn_player(&mut self) {
+        let mut p = Player::on_runway(self.player.ty);
+        p.pos = p.pos.add(runway_dir().mul(self.spawn_offset));
+        self.player = p;
     }
 
     /// Taxi / takeoff roll: nosewheel steering, no roll, nose rotation above Vr, and

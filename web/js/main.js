@@ -31,6 +31,8 @@ import { Clouds } from './clouds.js';
 import { PostFx } from './post.js';
 import { Flyby } from './flyby.js';
 import { Quality } from './quality.js';
+import { Online, SPAWN_SPACING } from './online.js';
+import { Lobby } from './lobby.js';
 
 /**
  * Fixed simulation step: the core always advances by exactly this much, so the outcome
@@ -117,6 +119,11 @@ let prevBots = null;
 let prevValid = false;
 /** The bot records one step back, or null before the first step. */
 const previousBots = () => (prevValid ? prevBots : null);
+/** Online room (online.js) and its screens (lobby.js), made at boot. */
+let online;
+let lobby;
+/** Time of day last shown, so the room's setting is only applied when it changes. */
+let nightShown = null;
 const quality = new Quality(applyQuality);
 const replay = new Replay(1 / FIXED_STEP);
 
@@ -150,6 +157,10 @@ function onKey(code) {
     return;
   }
   if (state !== 'play') return;
+  if (code === 'KeyX' && online.active && online.room.gunsOnly) {
+    hud.message('Guns only in this room', COLORS.WARN, 1.5);
+    return;
+  }
   if (gforce.incapacitated && (code === 'KeyX' || code === 'KeyG' || code === 'KeyZ')) return;
   switch (code) {
     case 'KeyX':
@@ -193,12 +204,31 @@ function setState(s) {
   if (s === 'menu') hud.clear();
   if (s === 'menu' || s === 'pause') renderCareer(career);
   rig.setMenuFraming(s === 'menu');
+  // The menu shows only our aircraft; the other pilots return with the next step.
+  if (s === 'menu') online?.hideAll();
+  if (s !== 'play') $('scoreboard').classList.add('hidden');
+}
+
+/** In a room the simulation keeps running while paused: the others are still flying. */
+const running = () => state === 'play' || (state === 'pause' && online.active);
+
+/** Day or night: the room's setting while online, else the player's own (settings.js). */
+function showTimeOfDay(night) {
+  if (online?.active) night = online.room.night;
+  if (night === nightShown) return;
+  nightShown = night;
+  setTimeOfDay(night);
 }
 
 /** Reset the core with the selected aircraft and the saved enemy settings. */
 function resetSim() {
-  sim.init(selected);
+  sim.init(selected, online.active ? online.room.seed : undefined);
   applySettings(sim);
+  // A room is free-for-all among its pilots, each with their own spot on the runway.
+  if (online.active) {
+    sim.setMode(MODE.FREE);
+    sim.setSpawnOffset(online.me.index * SPAWN_SPACING);
+  }
   accumulator = 0;
   prevValid = false;
   replay.clear();
@@ -220,6 +250,10 @@ function startGame() {
   lastAmmo = 0;
   hud.messages = [];
   hud.message(`${AIRCRAFT[selected].name} · 1923 runway 36`, COLORS.PRIMARY, 4);
+  if (online.active) {
+    const n = online.pilots.size + 1;
+    hud.message(`ONLINE · room ${online.room.id} · ${n} pilot${n === 1 ? '' : 's'} · Tab for scores`, COLORS.PRIMARY, 5);
+  }
   hud.message('Shift for throttle, S to rotate · Left Ctrl cuts throttle', COLORS.WARN, 6);
   // The core announced the first objective during init, before anyone listened.
   const { mode } = sim.stats();
@@ -242,10 +276,18 @@ async function lockKeyboard() {
 
 // Number keys pick aircraft, Enter takes off while in the menu.
 addEventListener('keydown', (e) => {
-  if (state !== 'menu') return;
+  // Hold Tab for the room's scoreboard while flying.
+  if (e.code === 'Tab' && state === 'play' && online.active) {
+    e.preventDefault();
+    $('scoreboard').classList.remove('hidden');
+  }
+  if (state !== 'menu' || lobby?.isOpen) return;
   const n = Number(e.key);
   if (n >= 1 && n <= AIRCRAFT.length) selectAircraft(n - 1);
   if (e.key === 'Enter' && !e.repeat && !(document.activeElement instanceof HTMLButtonElement)) startGame();
+});
+addEventListener('keyup', (e) => {
+  if (e.code === 'Tab') $('scoreboard').classList.add('hidden');
 });
 document.addEventListener('fullscreenchange', () => {
   if (!document.fullscreenElement) navigator.keyboard?.unlock?.();
@@ -255,7 +297,7 @@ document.addEventListener('visibilitychange', () => {
   quality.restart();
 });
 addEventListener('beforeunload', (e) => {
-  if (state === 'play' || state === 'pause') e.preventDefault();
+  if (state === 'play' || state === 'pause' || online?.active) e.preventDefault();
 });
 
 $('start-btn').onclick = startGame;
@@ -278,6 +320,7 @@ const eventPos = new THREE.Vector3();
 
 /** One core event; `e` is reused by Sim.forEachEvent, so nothing here keeps it. */
 function handleEvent(e) {
+  if (online.active) online.event(e);
   const pos = eventPos.set(e.x, e.y, e.z);
   const distance = pos.distanceTo(camera.position);
   switch (e.type) {
@@ -392,6 +435,9 @@ function missionMessage(code) {
 function simulate(frameDt) {
   controls.update(frameDt, gforce.incapacitated);
   const input = controls.consume();
+  if (online.active && online.room.gunsOnly) input.missile = false;
+  // Paused in a room: the aircraft flies on hands-off.
+  if (state === 'pause') Object.assign(input, { pitch: 0, roll: 0, yaw: 0, gun: false, missile: false, flare: false });
   sim.setInput(input);
   accumulator += frameDt;
   let steps = 0;
@@ -409,7 +455,9 @@ function simulate(frameDt) {
     if (!prevBots || prevBots.length !== botBuf.length) prevBots = new Float32Array(botBuf.length);
     prevBots.set(botBuf);
     prevValid = true;
+    if (online.active) online.beforeStep(FIXED_STEP);
     sim.step(FIXED_STEP);
+    if (online.active) online.afterStep();
     const pilot = sim.player();
     gforce.update(pilot.gLoad, AIRCRAFT[pilot.type].gOnset, pilot.alive, FIXED_STEP);
     // The core clears events on every step.
@@ -525,7 +573,8 @@ function hudData(p, stats, dt) {
     t.locked = locked;
     t.b2 = b2;
     t.friendly = friendly;
-    t.label = buf[o + BOT.DETECTED] < 0 ? 'MEM' : friendly ? 'ESCORT' : b2 ? 'B-2' : '';
+    const remote = buf[o + BOT.REMOTE] > 0;
+    t.label = buf[o + BOT.DETECTED] < 0 ? 'MEM' : remote ? online.nameOf(i) : friendly ? 'ESCORT' : b2 ? 'B-2' : '';
     hudRadar[n] = r;
     hudTargets[n++] = t;
   }
@@ -757,21 +806,25 @@ function frame(now) {
   if (state === 'loading' || document.hidden) return;
   quality.sample(elapsed, state === 'play' || state === 'menu');
 
-  if (state === 'play') simulate(frameDt);
+  const run = running();
+  /** Paused offline: the world stands still. */
+  const frozen = state === 'pause' && !run;
+  if (run) simulate(frameDt);
+  online.tick(frameDt, state === 'play' || state === 'pause');
   const live = sim.player();
   // Respawned: the kill cam is over.
   if (replay.active && live.alive) replay.stop();
   // Shot down: the crash is shown live (wreck orbit) before the replay starts.
-  if (replay.active && state === 'play') replay.tick(frameDt);
-  const alpha = state === 'play' ? accumulator / FIXED_STEP : 1;
+  if (replay.active && run) replay.tick(frameDt);
+  const alpha = run ? accumulator / FIXED_STEP : 1;
   if (replay.playing && state === 'play') {
     vortices.clear();
     renderKillcam(live, frameDt);
   } else {
     const p = interpolatedPlayer(live, alpha);
-    player.update(p, state === 'play' && rig.cockpit, state === 'pause' ? 0 : frameDt);
+    player.update(p, state === 'play' && rig.cockpit, frozen ? 0 : frameDt);
     playerLights.update(player.group, player.current.lights, player.gearDown, p.alive);
-    if (state !== 'pause') {
+    if (!frozen) {
       bots.update(sim.bots(), sim.maxBots, previousBots(), alpha, frameDt);
       effects.updateTracers(sim.bullets(), sim.maxBullets);
       effects.updateMissiles(sim.missiles(), sim.maxMissiles);
@@ -779,17 +832,17 @@ function frame(now) {
     rig.setAir(state === 'play' ? airflow.buffet : 0, p.gLoad);
     rig.update(p, AIRCRAFT[p.type], state === 'menu', dt);
     // Wingtip vortices and wing vapor freeze while paused.
-    const wakeDt = state === 'play' ? frameDt : 0;
+    const wakeDt = run ? frameDt : 0;
     if (state === 'menu') vortices.clear();
     else vortices.update(p, sim.bots(), previousBots(), alpha, FIXED_STEP, sim.maxBots, camera.position, wakeDt);
     vapor.update(p, player.group, vortices.wing(p.type), state === 'play', wakeDt);
-    clouds.update(camera.position, state === 'pause' ? 0 : frameDt);
-    post.begin(state === 'pause' ? 0 : frameDt, clouds.inside);
+    clouds.update(camera.position, frozen ? 0 : frameDt);
+    post.begin(frozen ? 0 : frameDt, clouds.inside);
     if (!rig.cockpit || state !== 'play') exhaustShimmer(p);
   }
   const flying = (state === 'play' || state === 'pause') && !replay.active;
-  airflow.update(live, camera.position, flying, state === 'pause' ? 0 : frameDt);
-  if (state !== 'pause') {
+  airflow.update(live, camera.position, flying, frozen ? 0 : frameDt);
+  if (!frozen) {
     effects.updateFlares(sim.flares(), sim.maxFlares);
     groundTargets.update(sim.ground(), live, frameDt);
     effects.update(frameDt);
@@ -806,6 +859,46 @@ function frame(now) {
   updateShadows(lightMoved, frameDt);
   effects.draw(camera);
   post.render();
+}
+
+// ---------------------------------------------------------------------------
+// Online
+// ---------------------------------------------------------------------------
+
+/**
+ * Joined or left a room: back to the aircraft selection with the room's (or the player's
+ * own) settings applied, so the next take-off starts from the right runway spot.
+ */
+function roomChanged() {
+  lobby.render();
+  // Also switches to the room's time of day, or back to the player's own.
+  resetSim();
+  if (state === 'play' || state === 'pause') setState('menu');
+}
+
+/** A pilot in the room went down; `victim` / `killer` may be online.me. */
+function onlineDown(victim, killer) {
+  const me = online.me;
+  if (victim !== me) {
+    // Their own client decided it; show the kill where we last saw them.
+    const buf = sim.bots();
+    const o = victim.slot * BOT.STRIDE;
+    if (buf[o + BOT.ALIVE] > 0) {
+      const pos = eventPos.set(buf[o + BOT.POS], buf[o + BOT.POS + 1], buf[o + BOT.POS + 2]);
+      effects.explosion(pos, 1.4);
+      bots.breakup(pos, wreckage);
+      sound.explosion(pos.distanceTo(camera.position));
+    }
+  }
+  if (killer === me && victim !== me) {
+    hud.message(`YOU SHOT DOWN ${victim.name.toUpperCase()}`, COLORS.PRIMARY, 3);
+    const promoted = career.addKill();
+    if (promoted) hud.message(`PROMOTED · ${promoted.name.toUpperCase()}`, COLORS.WARN, 4);
+  } else if (victim === me) {
+    hud.message(killer ? `SHOT DOWN BY ${killer.name.toUpperCase()}` : 'YOU WENT DOWN', COLORS.DANGER, 4);
+  } else {
+    hud.message(killer ? `${killer.name} shot down ${victim.name}` : `${victim.name} went down`, COLORS.WARN, 3);
+  }
 }
 
 const nozzleStart = new THREE.Vector3();
@@ -872,10 +965,21 @@ async function boot() {
     bots = new BotAircraft(scene, models, effects);
     groundTargets = new GroundTargets(scene, sim.maxGround);
     menu = new Menu(models, selectAircraft, startGame);
+    online = new Online(sim, {
+      onChange: () => lobby?.render(),
+      onJoin: (p) => hud.message(`${p.name} joined the room`, COLORS.PRIMARY, 3),
+      onLeave: (p) => hud.message(`${p.name} left the room`, COLORS.WARN, 3),
+      onDown: onlineDown,
+      onClosed: (reason) => {
+        hud.message(reason, COLORS.DANGER, 5);
+        roomChanged();
+      },
+    });
+    lobby = new Lobby(online, { onRoom: roomChanged });
     bindSettingsUi(sim);
     bindVolumeUi(sound);
     bindGraphics((mode) => quality.setMode(mode));
-    bindTimeOfDay(setTimeOfDay);
+    bindTimeOfDay(showTimeOfDay);
     selectAircraft(selected);
     await Promise.all([waitForTiles(world.tiles), world.ready]);
     try {
@@ -885,8 +989,9 @@ async function boot() {
       console.warn('Shader precompile failed', e);
     }
     progress(1, 'Ready');
-    window.__1923 = { sim, world, camera, scene, controls, airflow, vortices, vapor, clouds, post, rig, quality, renderer, effects };
+    window.__1923 = { sim, world, camera, scene, controls, airflow, vortices, vapor, clouds, post, rig, quality, renderer, effects, online };
     setState('menu');
+    lobby.checkInvite();
     // Remaining aircraft download one by one while the player sits in the menu.
     models.prefetchIdle();
   } catch (e) {

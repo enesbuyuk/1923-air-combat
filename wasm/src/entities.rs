@@ -275,6 +275,12 @@ pub struct Bot {
     pub tactic: Tactic,
     /// Turn direction (+1 right, -1 left) chosen when a break or evasion starts.
     pub break_side: f32,
+    /// Another pilot in an online room (`game/remote.rs`): posed from the network, not by the AI.
+    pub remote: bool,
+    /// Whether that pilot is holding the trigger.
+    pub remote_gun: bool,
+    /// Cannon damage dealt to that pilot here, not yet sent to them.
+    pub remote_damage: f32,
 }
 
 impl Deref for Bot {
@@ -346,6 +352,9 @@ impl Bot {
         jink: 0.0,
         tactic: Tactic::Patrol,
         break_side: 1.0,
+        remote: false,
+        remote_gun: false,
+        remote_damage: 0.0,
     };
 
     /// A bot in level flight at `pos` heading `fwd` (flat) at `speed`.
@@ -379,6 +388,8 @@ impl Bot {
 pub enum Owner {
     Player = 0,
     Bot = 1,
+    /// Another pilot's rounds and missiles as seen here: shown, but they hurt nobody.
+    Remote = 2,
 }
 
 #[derive(Clone, Copy)]

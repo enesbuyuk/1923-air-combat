@@ -30,13 +30,35 @@ if [[ "$wasm_opt_level" != "0" ]] && command -v wasm-opt >/dev/null 2>&1; then
 fi
 echo "OK: web/1923_air.wasm ($(wc -c < web/1923_air.wasm) bytes)"
 
-if [[ "${1:-}" == "serve" ]]; then
+if [[ "${1:-}" == "serve" || "${1:-}" == "online" ]]; then
   # Use PORT if given, otherwise the first free port from 8080 upward.
   port="${PORT:-8080}"
   while lsof -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; do
     echo "Port $port is in use, trying $((port + 1))…"
     port=$((port + 1))
   done
+fi
+
+if [[ "${1:-}" == "serve" ]]; then
   echo "http://localhost:$port"
   cd web && python3 -m http.server "$port"
+fi
+
+# Online play needs the worker (rooms are Durable Objects), so run it locally with
+# wrangler. The aircraft GLBs come from R2 there too: copy them into the local bucket,
+# only the ones changed since the last copy.
+if [[ "${1:-}" == "online" ]]; then
+  tools/render_wrangler.sh
+  source tools/env.sh
+  stamp=.wrangler/models.stamp
+  for f in web/models/*.glb; do
+    if [[ ! -f "$stamp" || "$f" -nt "$stamp" ]]; then
+      echo "Local R2: $(basename "$f")"
+      npx wrangler r2 object put "$R2_BUCKET/models/$(basename "$f")" \
+        --file "$f" --content-type model/gltf-binary --local >/dev/null
+    fi
+  done
+  mkdir -p .wrangler && touch "$stamp"
+  echo "http://localhost:$port"
+  exec npx wrangler dev --port "$port"
 fi

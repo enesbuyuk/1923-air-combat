@@ -79,6 +79,23 @@ pub mod bot {
     pub const FUEL: usize = 20;
     pub const AMMO: usize = 21;
     pub const FLAPS: usize = 22;
+    pub const REMOTE: usize = 23; // 1 for another pilot in an online room
+}
+
+/// Pose of another pilot in an online room, written by JS before `set_remote`.
+pub mod remote {
+    pub const LEN: usize = 18;
+    pub const TYPE: usize = 0;
+    pub const POS: usize = 1; // x, y, z
+    pub const QUAT: usize = 4; // x, y, z, w
+    pub const VEL: usize = 8; // x, y, z
+    pub const ENGINE: usize = 11;
+    pub const GEAR: usize = 12;
+    pub const FLAPS: usize = 13;
+    pub const HP: usize = 14;
+    pub const MAX_HP: usize = 15;
+    pub const ALIVE: usize = 16;
+    pub const GUN: usize = 17; // 1 while the trigger is held
 }
 
 /// Bullet records (MAX_BULLETS).
@@ -88,7 +105,7 @@ pub mod bullet {
     pub const VEL: usize = 3;
     pub const LIFE: usize = 6;
     pub const ROUNDS: usize = 8;
-    pub const OWNER: usize = 7; // 0 player, 1 bot
+    pub const OWNER: usize = 7; // 0 player, 1 bot, 2 remote pilot
 }
 
 /// Missile records (MAX_MISSILES).
@@ -98,7 +115,7 @@ pub mod missile {
     pub const VEL: usize = 3;
     pub const LIFE: usize = 6;
     pub const TARGET: usize = 7; // Track::code: bot index, -1 none, -2 player, -3 flare, -(100 + i) ground target i
-    pub const OWNER: usize = 8; // 0 player, 1 enemy
+    pub const OWNER: usize = 8; // 0 player, 1 enemy, 2 remote pilot
     pub const RADAR: usize = 10;
     pub const BURN: usize = 9; // 1 while the motor burns
 }

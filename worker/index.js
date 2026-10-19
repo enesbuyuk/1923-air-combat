@@ -1,6 +1,48 @@
 // Cloudflare Worker: only runs for requests that are not static assets. The aircraft
 // GLBs are excluded from the assets (web/.assetsignore) and live in the R2 bucket under
 // the same path, so the game loads them from /models/<key>.glb as in local development.
+// /api/rooms/... is the online mode: each room is a Durable Object (room.js).
+
+import { Room, cleanName } from './room.js';
+
+export { Room };
+
+/** Room codes: no 0/O or 1/I, so they survive being read out loud. */
+const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const CODE_LENGTH = 6;
+const ROOM_PATH = /^\/api\/rooms(?:\/([A-Z0-9]{6})(?:\/(ws))?)?$/;
+
+function randomCode() {
+  const bytes = crypto.getRandomValues(new Uint8Array(CODE_LENGTH));
+  return Array.from(bytes, (b) => CODE_ALPHABET[b % CODE_ALPHABET.length]).join('');
+}
+
+/** POST /api/rooms creates a room; GET /api/rooms/<code> describes it; /ws joins it. */
+async function rooms(request, env, match) {
+  const [, code, ws] = match;
+  if (!code) {
+    if (request.method !== 'POST') return new Response('Method not allowed', { status: 405, headers: { Allow: 'POST' } });
+    let body = {};
+    try {
+      body = await request.json();
+    } catch {}
+    const id = randomCode();
+    const settings = {
+      id,
+      night: !!body.night,
+      gunsOnly: !!body.gunsOnly,
+      seed: crypto.getRandomValues(new Uint32Array(1))[0] || 1,
+      hostName: cleanName(body.name),
+      hostToken: crypto.randomUUID(),
+      created: Date.now(),
+    };
+    const stub = env.ROOMS.get(env.ROOMS.idFromName(id));
+    return stub.fetch(new Request(`https://room/${id}/setup`, { method: 'POST', body: JSON.stringify(settings) }));
+  }
+  const stub = env.ROOMS.get(env.ROOMS.idFromName(code));
+  const url = new URL(request.url);
+  return stub.fetch(new Request(`https://room/${code}/${ws ? 'ws' : 'info'}${url.search}`, request));
+}
 
 const MODEL_PATH = /^\/models\/[\w-]+\.(glb|gltf|bin|ktx2)$/;
 
@@ -26,6 +68,8 @@ function contentRange(range, size) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    const room = ROOM_PATH.exec(url.pathname);
+    if (room) return rooms(request, env, room);
     const match = MODEL_PATH.exec(url.pathname);
     if (!match) return env.ASSETS.fetch(request);
     const head = request.method === 'HEAD';

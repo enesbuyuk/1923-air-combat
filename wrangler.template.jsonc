@@ -15,6 +15,11 @@
     "directory": "./web",
     "binding": "ASSETS"
   },
+  // Online rooms (worker/room.js), one Durable Object per room.
+  "durable_objects": {
+    "bindings": [{ "name": "ROOMS", "class_name": "Room" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Room"] }],
   "r2_buckets": [
     {
       "binding": "MODELS",

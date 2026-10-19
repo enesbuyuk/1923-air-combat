@@ -7,6 +7,7 @@ mod configuration;
 mod flight;
 pub mod missions;
 mod projectiles;
+mod remote;
 mod sensors;
 #[cfg(test)]
 mod tests;
@@ -23,6 +24,14 @@ pub use missions::Mode;
 pub struct Game {
     pub environment: crate::environment::Environment,
     pub obstacle_import: [f32; 1027],
+    pub remote_import: [f32; layout::remote::LEN],
+    /// Metres down the runway from the usual start point where the player (re)spawns, so
+    /// pilots in an online room do not start inside each other.
+    pub spawn_offset: f32,
+    /// Damage other online pilots reported, and where their last missile at the player
+    /// was launched: arriving between steps, applied in the next one so its events reach JS.
+    remote_hits: f32,
+    remote_launch: Option<V3>,
     contacts: [sensors::Contact; MAX_BOTS + MAX_GROUND],
     sensor_timer: f32,
     pub(crate) rng: Rng,
@@ -71,6 +80,10 @@ impl Game {
         Game {
             environment: crate::environment::Environment::default(),
             obstacle_import: [0.0; 1027],
+            remote_import: [0.0; layout::remote::LEN],
+            spawn_offset: 0.0,
+            remote_hits: 0.0,
+            remote_launch: None,
             contacts: [sensors::Contact::default(); MAX_BOTS + MAX_GROUND],
             sensor_timer: 0.0,
             rng,
@@ -128,9 +141,9 @@ impl Game {
         }
     }
 
-    /// Live enemy aircraft (the escorted bomber does not count).
+    /// Live enemy aircraft (the escorted bomber and other online pilots do not count).
     fn bots_alive(&self) -> usize {
-        self.bots.iter().filter(|b| b.alive && !b.friendly).count()
+        self.bots.iter().filter(|b| b.alive && !b.friendly && !b.remote).count()
     }
 
     fn reset_lock(&mut self) {
@@ -146,6 +159,7 @@ impl Game {
         self.events.clear();
         let dt = clamp(dt, 0.0, MAX_STEP);
         if dt <= 0.0 || !dt.is_finite() { self.write_out(); return; }
+        self.apply_remote();
         let h = dt / SUBSTEPS as f32;
         for _ in 0..SUBSTEPS {
             self.time += h;
@@ -256,6 +270,12 @@ impl Game {
         if !b.alive {
             return;
         }
+        if b.remote {
+            // Their own client applies it (and the system damage) once JS sends it over.
+            b.remote_damage += dmg;
+            self.event(event::BOT_HIT, at, i as f32);
+            return;
+        }
         b.hp -= dmg;
         configuration::system_damage(&mut b.af, dmg, roll, severity);
         if b.hp > 0.0 {
@@ -267,9 +287,10 @@ impl Game {
     }
 
     /// Removes a bot; `credit` awards the kill to the player (shot down or forced into the ground).
+    /// Another online pilot only goes down when their own client says so.
     fn destroy_bot(&mut self, i: usize, at: V3, credit: bool) {
         let b = &mut self.bots[i];
-        if !b.alive {
+        if !b.alive || b.remote {
             return;
         }
         b.alive = false;
@@ -460,6 +481,7 @@ impl Game {
             o[bot::FUEL] = b.fuel;
             o[bot::AMMO] = b.ammo;
             o[bot::FLAPS] = b.flaps;
+            o[bot::REMOTE] = flag(b.remote);
         }
     }
 

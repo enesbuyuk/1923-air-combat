@@ -163,7 +163,7 @@ impl Game {
             if spawned == count {
                 break;
             }
-            if self.bots[slot].alive {
+            if self.bots[slot].alive || self.bots[slot].remote {
                 continue;
             }
             let ang = self.rng.range(0.0, 2.0 * PI);
@@ -198,6 +198,10 @@ impl Game {
         let skill = self.skill();
         for i in 0..MAX_BOTS {
             if !self.bots[i].alive {
+                continue;
+            }
+            if self.bots[i].remote {
+                self.update_remote(i, dt);
                 continue;
             }
             let mut b = self.bots[i];

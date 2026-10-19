@@ -48,6 +48,13 @@ export const BOT = {
   STRIDE: 24, POS: 0, QUAT: 3, HP: 7, ALIVE: 8, TYPE: 9, SPEED: 10,
   FRIENDLY: 11, TACTIC: 12, MAX_HP: 13, ENGINE: 14,
   DETECTED: 15, CONTACT_POS: 16, GEAR: 19, FUEL: 20, AMMO: 21, FLAPS: 22,
+  REMOTE: 23, // 1 for another pilot in an online room
+};
+
+/** Pose of another online pilot (`set_remote`); also the order of a network state snapshot. */
+export const REMOTE = {
+  LEN: 18, TYPE: 0, POS: 1, QUAT: 4, VEL: 8, ENGINE: 11, GEAR: 12, FLAPS: 13,
+  HP: 14, MAX_HP: 15, ALIVE: 16, GUN: 17,
 };
 
 /** Bot tactics (BOT.TACTIC), entities::Tactic in the core. */
@@ -55,8 +62,11 @@ export const TACTIC = { PATROL: 0, ATTACK: 1, BREAK: 2, EVADE: 3, RECOVER: 4, ES
 
 export const BULLET = { STRIDE: 10, POS: 0, VEL: 3, LIFE: 6, OWNER: 7, ROUNDS: 8 };
 export const OWNER_PLAYER = 0;
+/** Rounds and missiles of another online pilot, shown only. */
+export const OWNER_REMOTE = 2;
 
 // TARGET: bot index, -1 none, -2 player, -3 flare, -(100 + i) ground target i.
+// OWNER: 0 player, 1 enemy, 2 another online pilot.
 export const MISSILE = { STRIDE: 12, POS: 0, VEL: 3, LIFE: 6, TARGET: 7, OWNER: 8, BURN: 9, RADAR: 10 };
 export const MISSILE_AT_PLAYER = -2;
 

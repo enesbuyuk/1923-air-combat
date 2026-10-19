@@ -90,6 +90,7 @@ impl Game {
                         false
                     }
                 }
+                Owner::Remote => false,
                 Owner::Bot => {
                     let p = &self.player;
                     let dmg = damage;
@@ -265,7 +266,9 @@ impl Game {
         match m.owner {
             Owner::Player => {
                 if let Some((i, k)) = self.bot_fuse(start, m.pos, false, fuse) {
-                    self.damage_bot(i, MISSILE_DAMAGE * k, m.pos);
+                    // The target's own client flies this missile and decides the hit.
+                    if self.bots[i].remote { self.event(event::GROUND_IMPACT, m.pos, 0.0); }
+                    else { self.damage_bot(i, MISSILE_DAMAGE * k, m.pos); }
                     return true;
                 }
                 if let Some(i) = self.ground_on_segment(start, m.pos, GROUND_TARGET_RADIUS + fuse) {
@@ -288,6 +291,14 @@ impl Game {
                     return true;
                 }
                 false
+            }
+            // Shown only: it bursts at its target and hurts nobody.
+            Owner::Remote => {
+                let Track::Bot(i) = m.track else { return false };
+                let b = &self.bots[i];
+                let hit = b.alive && Self::fuse_hit(start, m.pos, b.pos, b.stats().radius, fuse).is_some();
+                if hit { self.event(event::GROUND_IMPACT, m.pos, 0.0); }
+                hit
             }
         }
     }

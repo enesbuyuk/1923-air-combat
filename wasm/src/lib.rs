@@ -15,7 +15,7 @@ mod layout;
 mod math;
 
 use config::{DIFFICULTY, RUNWAY_HEADING_DEG, RUNWAY_LENGTH, RUNWAY_WIDTH, STATS};
-use entities::Input;
+use entities::{Input, Track};
 use game::Game;
 use layout::{MAX_BOTS, MAX_BULLETS, MAX_FLARES, MAX_GROUND, MAX_MISSILES};
 use math::{clamp, V3};
@@ -120,6 +120,55 @@ pub extern "C" fn add_obstacle(dynamic: i32) {
     let (bottom, top) = (g.obstacle_import[1], g.obstacle_import[2]);
     let obstacles = if dynamic != 0 { &mut g.environment.dynamic_obstacles } else { &mut g.environment.static_obstacles };
     obstacles.add(points, bottom, top);
+}
+
+/// Metres down the runway from the usual start point where the player spawns (online
+/// rooms give every pilot their own spot). Moves an aircraft still waiting at the start.
+#[no_mangle]
+pub extern "C" fn set_spawn_offset(metres: f32) {
+    let g = game();
+    g.spawn_offset = clamp(metres, 0.0, RUNWAY_LENGTH * 0.5);
+    let p = &g.player;
+    if p.alive && p.on_ground && p.speed < 1.0 {
+        g.spawn_player();
+    }
+    g.write_out();
+}
+
+#[no_mangle]
+pub extern "C" fn remote_buffer_ptr() -> *mut f32 { game().remote_import.as_mut_ptr() }
+/// Poses bot slot `slot` as another online pilot from the remote buffer (`layout::remote`).
+#[no_mangle]
+pub extern "C" fn set_remote(slot: i32, live: i32) {
+    if slot >= 0 { game().set_remote(slot as usize, live != 0); }
+}
+#[no_mangle]
+pub extern "C" fn clear_remote(slot: i32) {
+    if slot >= 0 { game().clear_remote(slot as usize); }
+}
+/// Cannon damage dealt to the online pilot in `slot` since the last call.
+#[no_mangle]
+pub extern "C" fn take_remote_damage(slot: i32) -> f32 {
+    if slot < 0 { 0.0 } else { game().take_remote_damage(slot as usize) }
+}
+/// Damage another online pilot dealt to the player.
+#[no_mangle]
+pub extern "C" fn remote_hit(damage: f32) {
+    game().remote_hit(damage);
+}
+/// A missile fired by another online pilot. `target`: -2 the player, a bot slot, or -1 none.
+#[no_mangle]
+pub extern "C" fn remote_missile(x: f32, y: f32, z: f32, vx: f32, vy: f32, vz: f32, target: i32) {
+    let track = match target {
+        -2 => Track::Player,
+        t if (0..layout::MAX_BOTS as i32).contains(&t) => Track::Bot(t as usize),
+        _ => Track::None,
+    };
+    game().launch_remote_missile(V3::new(x, y, z), V3::new(vx, vy, vz), track);
+}
+#[no_mangle]
+pub extern "C" fn remote_flare(slot: i32) {
+    if slot >= 0 { game().remote_flare(slot as usize); }
 }
 
 /// See `Game::building_hit`. Output buffers are refreshed so JS sees the result at once.
