@@ -110,7 +110,7 @@ export function bindGraphics(hook) {
 
 // Master volume (0..100 %), kept apart from SETTINGS because it drives the audio, not the core.
 const VOLUME_KEY = STORAGE_PREFIX + 'volume';
-const DEFAULT_VOLUME = 80;
+const DEFAULT_VOLUME = 50;
 const SLIDER_KEYS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown']);
 
 function loadVolume() {
